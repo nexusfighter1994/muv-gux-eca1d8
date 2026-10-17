@@ -47,12 +47,12 @@ const production = fetchImpl => ({...config(fetchImpl), nativeReserveRatio: 0.3,
 const options = name => ({compositionHtml: '<html>orig</html>', renderOnlyHtml: '', assets: [], fps: 24, resolution: '1920x1080',
   workers: 3, quality: 'high', workDir: dir, targetPath: path.join(dir, name + '.mp4'), timeoutMs: 600000});
 
-test('source workers 3 render on Home as ONE worker; counter covers exactly the remote phase', async () => {
+test('source workers 3 render on the one Home slot with 3 capture workers; counter covers exactly the remote phase', async () => {
   const {seen, fetchImpl} = home();
   let native = 0;
   const result = await createMotionHook(async () => { native++; }, config(fetchImpl))(options('w3'), {duration: 1});
   assert.equal(native, 0);
-  assert.equal(seen.payloads[0].workers, 1);
+  assert.equal(seen.payloads[0].workers, 3);
   assert.equal(seen.payloads[0].compositionHtml, '<html>orig</html>');
   assert.deepEqual(seen.activeDuringRender, [1]);
   assert.equal(remote.snapshot().total, 0);

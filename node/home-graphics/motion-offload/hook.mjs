@@ -17,8 +17,8 @@ export function createMotionHook(nativeRender,{endpoint,token,contract,permitted
     if(signal?.aborted)throw signal.reason;
     if(!await permitted?.())throw Error('render scope superseded; no native fallback');
     if(signal?.aborted)throw signal.reason;
-    // Server parallelism (1..3 capture workers) maps to the ONE Home graphics slot;
-    // frames are identical, the native fallback keeps the original worker count.
+    // One Home graphics slot captures with the server's own worker count (1..3); frames
+    // are identical and the PC has the cores. The native fallback keeps the same count.
     const sourceWorkers=options.workers??1;
     if(!Number.isInteger(sourceWorkers)||sourceWorkers<1||sourceWorkers>3)return nativeRender(options);
     // The Home contract accepts 0 < duration <= 15 s; never upload work it must reject.
@@ -38,7 +38,7 @@ export function createMotionHook(nativeRender,{endpoint,token,contract,permitted
       const assets=[];let total=0;for(const a of options.assets??[]){const b=await fs.readFile(a.localPath);total+=b.length;if(total>MAX)throw Error('input size');assets.push({filename:a.filename,sha256:hash(b),data:b.toString('base64')});}
       const healthSignal=Number.isFinite(healthTimeoutMs)&&healthTimeoutMs>0?AbortSignal.any([controller.signal,AbortSignal.timeout(Math.ceil(healthTimeoutMs))]):controller.signal;
       const health=await fetchImpl(new URL('/motion/health',base),{headers,signal:healthSignal});if(!health.ok)throw Error('Home offline');
-      const payload={version:1,id,contract,compositionHtml:options.compositionHtml,renderOnlyHtml:options.renderOnlyHtml??'',assets,fps:options.fps,resolution:options.resolution,workers:1,quality:options.quality??'standard',duration,timeoutMs:Math.max(1,Math.floor(deadline-Date.now()-reserve))};
+      const payload={version:1,id,contract,compositionHtml:options.compositionHtml,renderOnlyHtml:options.renderOnlyHtml??'',assets,fps:options.fps,resolution:options.resolution,workers:sourceWorkers,quality:options.quality??'standard',duration,timeoutMs:Math.max(1,Math.floor(deadline-Date.now()-reserve))};
       possibleRemote=true;endRemote=remoteActive.begin(remoteResource);
       const response=await fetchImpl(new URL('/motion/render',base),{method:'POST',headers,body:JSON.stringify(payload),signal:controller.signal});
       if(!response.ok)throw Error('Home unavailable');

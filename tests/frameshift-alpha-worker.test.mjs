@@ -59,6 +59,12 @@ async function simulatedPerf(root, renderer = 'd3d11/nvidia') {
   await fs.writeFile(path.join(dir, 'perf-summary.json'), JSON.stringify({drawElement: {gpuRenderer: renderer}}));
 }
 
+test('Home may capture with up to the server worker count', async () => {
+  const {validate} = await worker();
+  for (const w of [1, 2, 3]) assert.equal(validate(payload({workers: w}), contract).workers, w);
+  assert.throws(() => validate(payload({workers: 2, sourceWorkers: 1}), contract));
+});
+
 test('strict explicit alpha payload preserves the original source', async () => {
   const {validate} = await worker();
   const p = payload();
@@ -70,7 +76,8 @@ test('strict explicit alpha payload preserves the original source', async () => 
 for (const [name, change] of Object.entries({
   kind: {kind: undefined}, opaqueKind: {kind: 'custom_animation'}, mp4: {format: 'mp4'},
   fps: {fps: 30}, resolution: {resolution: '1280x720'}, zero: {duration: 0},
-  long: {duration: 15.01}, nonfinite: {duration: NaN}, remoteWorkers: {workers: 3},
+  long: {duration: 15.01}, nonfinite: {duration: NaN}, remoteWorkers: {workers: 4}, remoteAboveSource: {workers: 3, sourceWorkers: 2},
+  fractionalRemote: {workers: 1.5},
   sourceWorkers: {sourceWorkers: 4}, fractionalWorkers: {sourceWorkers: 1.5},
   quality: {quality: 'ultra'}, deadline: {timeoutMs: 600001}, id: {id: '../escape'},
   html: {compositionHtml: 'x'.repeat(2 * 1024 * 1024 + 1)},
@@ -235,7 +242,7 @@ test('hook atomically publishes only independently verified alpha and strict rec
   assert.equal(result.videoPath, h.options.targetPath);
   assert.equal(h.nativeOptions.length, 0);
   assert.deepEqual(h.options, before);
-  assert.equal(h.posted[0].workers, 1);
+  assert.equal(h.posted[0].workers, 3, 'Home captures with the server worker count');
   assert.equal(h.posted[0].sourceWorkers, 3);
   assert.equal(h.posted[0].format, 'mov');
   assert.equal(h.posted[0].compositionHtml, h.options.compositionHtml);

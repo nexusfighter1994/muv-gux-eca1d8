@@ -48,9 +48,8 @@ test('authorization failures are never turned into a healthy connection', async 
 });
 
 test('Custom uses the current GPU-decode status asset instead of the stale cached version', () => {
-  const text = fs.readFileSync(new URL('../node/custom.mjs', import.meta.url), 'utf8');
-  const start = text.indexOf('function customPage() {');
-  const end = text.indexOf('export function installCustom', start);
-  const render = new Function('vidforgeStyles', text.slice(start, end) + ';return customPage;')(() => '');
-  assert.match(render(), /pc-boost-settings-20261002\.js\?v=connection-status-20261014a/);
+  // The Custom page lives in custom-page.mjs since the page split.
+  const text = fs.readFileSync(new URL('../node/custom-page.mjs', import.meta.url), 'utf8');
+  assert.match(text, /pc-boost-settings-20261002\.js\?v=graphics-slots-20261017a/);
+  assert.doesNotMatch(text, /pc-boost-settings-20261002\.js\?v=connection-status-20261014a/);
 });

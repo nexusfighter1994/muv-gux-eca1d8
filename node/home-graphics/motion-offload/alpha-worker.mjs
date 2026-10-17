@@ -33,8 +33,10 @@ export function validate(p, contract) {
   if (!Number.isInteger(p.timeoutMs) || p.timeoutMs < 1 || p.timeoutMs > 600000) throw Error('deadline');
   if (typeof contract !== 'string' || !contract || p.contract !== contract || p.version !== 1
     || p.kind !== KIND || p.format !== 'mov' || !/^[a-f0-9]{32}$/.test(p.id)
-    || p.fps !== 24 || p.resolution !== '1920x1080' || p.workers !== 1
+    || p.fps !== 24 || p.resolution !== '1920x1080'
     || !Number.isInteger(p.sourceWorkers) || p.sourceWorkers < 1 || p.sourceWorkers > 3
+    // Home captures with the server's own worker count (frames are identical; the PC has the cores).
+    || !Number.isInteger(p.workers) || p.workers < 1 || p.workers > p.sourceWorkers
     || !['draft', 'standard', 'high'].includes(p.quality)
     || !Number.isFinite(p.duration) || p.duration <= 0 || p.duration > 15) throw Error('alpha contract');
   if (typeof p.compositionHtml !== 'string' || !p.compositionHtml
@@ -196,7 +198,7 @@ export async function execute(p, config, {renderNative = renderPinned} = {}) {
     }
     const output = path.join(root, 'result.mov');
     await renderNative({compositionHtml: p.compositionHtml, renderOnlyHtml: p.renderOnlyHtml,
-      assets, fps: p.fps, resolution: p.resolution, format: p.format, workers: 1, quality: p.quality,
+      assets, fps: p.fps, resolution: p.resolution, format: p.format, workers: p.workers, quality: p.quality,
       targetPath: output, workDir: root, timeoutMs: p.timeoutMs, signal: controller.signal}, config);
     controller.signal.throwIfAborted();
     const probe = await verify(output, p, config.ffprobe, config.ffmpeg, controller.signal);

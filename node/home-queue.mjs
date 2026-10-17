@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import homeRam from './home-ram-estimate.cjs';
 
 export function withoutHomeFfmpegLane(getContext,runContext,fn){
   const context=getContext();
@@ -9,23 +10,9 @@ export function withoutHomeFfmpegLane(getContext,runContext,fn){
   return runContext({...context,lanes,leases},fn);
 }
 
-export function wrapHomeRamEstimate(original){
-  if(original.__vfHomeRamVersion==='home-only-v5')return original;
-  const wrapped=function(request={}){
-    if(['ffmpegHomeFallback','ffmpegHomeTrimFallback','ffmpegHomeNormalizeFallback'].includes(request.resourceKey)){
-      const composition=request.resourceKey==='ffmpegHomeFallback';
-      const estimate=original.call(this,{...request,resourceKey:composition?'fflowComposition':'ffmpeg'});
-      return {...estimate,mb:Math.max(estimate.mb,composition?1536:512)};
-    }
-    const estimate=original.call(this,request);
-    // Actual native queue-worker RSS is273-446MB. Reserve512MB per dispatcher,
-    // not the PC's rendering RAM; unknown Home keys remain non-learnable.
-    return request.resourceKey==='ffmpegHome'?{...estimate,mb:512}:estimate;
-  };
-  wrapped.__vfHomeRam=true;
-  wrapped.__vfHomeRamVersion='home-only-v5';
-  return wrapped;
-}
+// Server RAM estimates for Home dispatches live in home-ram-estimate.cjs (hot-installable).
+export const HOME_DISPATCH_MB=homeRam.HOME_DISPATCH_MB;
+export const wrapHomeRamEstimate=homeRam.wrapHomeRamEstimate;
 
 export function createHomeQueue({getState,getCapacity,memoryGate,claim,isAborted=()=>false,
   canClaim=()=>true,newNonce=()=>crypto.randomUUID(),now=Date.now,existingScopes=null,initialAdmitted=0}) {

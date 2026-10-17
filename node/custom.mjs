@@ -30,6 +30,7 @@ import jobPriority from './job-priority.cjs';
 import fflowResubmit from './fflow-resubmit.cjs';
 import brollReuse from './broll-reuse.cjs';
 import spawnProxy from './spawn-proxy.cjs';
+import procScan from './proc-scan-cache.cjs';
 import frameshiftRoute from './home-graphics/motion-offload/frameshift-route.cjs';
 import { getMotionConfiguration } from './home-graphics/motion-offload/binding.mjs';
 export { fishFreeModel, fishFreeAvailable } from './fish-free.mjs';
@@ -79,6 +80,12 @@ export function stableSegmentInput(segment) { return brollReuse.stableSegmentInp
 // Main-thread relief: native ffmpeg/ffprobe execs are spawned by a small helper (spawn-proxy.cjs).
 if (process.env.VF_SPAWN_PROXY !== '0') { try { spawnProxy.install(); } catch (error) { console.error('[vf-custom] spawn proxy unavailable', error); } }
 export function spawnProxyStats() { return globalThis.__vfSpawnProxy?.stats ?? null; }
+// Shared /proc snapshot for the native render memory sampler (proc-scan-cache-install.py).
+export const procScanTable = procScan.procScanTable;
+export const procScanPss = procScan.procScanPss;
+// Job pages rebuild the full job snapshot (DB + ETA) per subscribed job at most this often;
+// native default 1000 ms took ~13% of the busy main thread. An explicit env value wins.
+process.env.VIDFORGE_PROGRESS_SNAPSHOT_MIN_MS ??= '2000';
 // One Home-GPU route for every Frameshift render (alpha overlays + opaque motion), switch homeMotion.
 export function installFrameshiftRoute(native) {
   if (!modEnabled('homeMotion') || globalThis.__vfFrameshiftRoute) return globalThis.__vfFrameshiftRoute || null;

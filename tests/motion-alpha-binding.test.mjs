@@ -74,7 +74,7 @@ test('hot helper uses explicit alpha hook under active licensed ALS lease, prese
   assert.equal(payload.format, 'mov');
   assert.equal(payload.duration, 3.29);
   assert.equal(payload.sourceWorkers, 3);
-  assert.equal(payload.workers, 1);
+  assert.equal(payload.workers, 3);
   assert.equal(payload.compositionHtml, f.options.compositionHtml);
   const {timeoutMs, ...rest} = f.state.native[0];
   const {timeoutMs: originalTimeout, ...originalRest} = f.options;

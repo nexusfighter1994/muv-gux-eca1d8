@@ -355,8 +355,8 @@ function renderConcurrency(data) {
     }
     const worker = currentWorkerHealth(data?.health, key === 'siglip' ? 'siglip' : 'ffmpeg');
     if (key === 'graphics') {
-      row.querySelector('.vc-faint').textContent = worker?.graphicsCapacity === 1
-        ? `${number(worker.graphicsBusy)}/1 busy | ${number(worker.completedMap)} maps | ${number(worker.completedMotion)} motion completed (PC total)`
+      row.querySelector('.vc-faint').textContent = Number.isSafeInteger(worker?.graphicsCapacity) && worker.graphicsCapacity >= 1
+        ? `${number(worker.graphicsBusy)}/${worker.graphicsCapacity} busy | ${number(worker.completedMap)} maps | ${number(worker.completedMotion)} motion completed (PC total)`
         : 'Graphics worker unavailable; server normal';
       row.classList.toggle('vc-worker-row--busy', Number(worker?.graphicsBusy) > 0);
       continue;

@@ -21,7 +21,7 @@ class ExistingCustomUiTests(unittest.TestCase):
             module.PUBLIC = public
             module.ui()
             once = index.read_text()
-            self.assertIn('pc-boost-settings-20261002.js?v=connection-status-20261014a', once)
+            self.assertIn('pc-boost-settings-20261002.js?v=graphics-slots-20261017a', once)
             self.assertIn('pc-transfer-settings-20261011.js?v=size-nvenc-20261013a', once)
             self.assertIn('pc-transfer-settings-20261011.css?v=size-20261011b', once)
             module.ui()

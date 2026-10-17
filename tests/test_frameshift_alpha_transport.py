@@ -150,7 +150,7 @@ class AlphaTransportTests(unittest.TestCase):
             health = handler.responses[0]
             self.assertIsInstance(health.get('kinds'), list)
             self.assertEqual(ALPHA in health['kinds'], alpha)
-            self.assertEqual(health['slots'], 1)
+            self.assertEqual(health['slots'], transport.GRAPHICS_SLOTS)
 
     def test_unqualified_old_service_rejects_alpha_before_spawning(self):
         with patch.object(transport.subprocess, 'Popen', return_value=process()) as spawn:
@@ -280,7 +280,8 @@ class AlphaTransportTests(unittest.TestCase):
     def test_shared_lease_charges_once_and_rejects_concurrent_alpha(self):
         def active():
             self.assertEqual(self.worker.busy, {'cpu': 18, 'gpu': 6})
-            with self.assertRaisesRegex(RuntimeError, 'motion busy'):
+            # The second graphics slot is free, but the shared six-slot GPU budget is full.
+            with self.assertRaisesRegex(RuntimeError, 'shared GPU unavailable|motion busy'):
                 self.service.render(payload(id='b' * 32))
         with patch.object(transport.subprocess, 'Popen', return_value=process(callback=active)) as spawn:
             self.service.render(payload())
@@ -411,6 +412,53 @@ class AlphaTransportTests(unittest.TestCase):
                 adapter.paced_dispatch(handler, self.worker, Pace(), Pace())
 
 
+class GraphicsSlotTests(unittest.TestCase):
+    """Two graphics jobs may run at once when the GPU budget allows; a third waits (503)."""
+    def test_two_parallel_jobs_then_motion_busy(self):
+        w = worker()
+        w.busy = {'cpu': 0, 'gpu': 0}
+        service = make_service(w)
+        self.assertEqual(service.slots, 2)
+        self.assertTrue(service.slot.acquire(False))
+        self.assertTrue(service.slot.acquire(False))
+        self.assertFalse(service.slot.acquire(False), 'third graphics job must wait')
+        self.assertTrue(service.slot.locked())
+        service.slot.release(); service.slot.release()
+        self.assertFalse(service.slot.locked())
+        with self.assertRaises(RuntimeError):
+            service.slot.release()
+
+    def test_second_render_runs_while_first_is_active(self):
+        w = worker()
+        w.busy = {'cpu': 0, 'gpu': 0}
+        service = make_service(w)
+        seen = []
+        def active():
+            seen.append(service.slot.locked())
+            second = payload(id='b' * 32)
+            with patch.object(transport.subprocess, 'Popen', return_value=process(receipt(second))):
+                service.render(second)
+            seen.append('second done')
+        with patch.object(transport.subprocess, 'Popen', return_value=process(callback=active)):
+            service.render(payload())
+        self.assertEqual(seen, [True, 'second done'])
+        self.assertFalse(service.slot.locked())
+
+
+class CaptureWorkerTests(unittest.TestCase):
+    """Home captures with the server's worker count (1..3); anything else stays rejected."""
+    def setUp(self):
+        self.service = make_service(worker())
+
+    def test_alpha_accepts_one_to_three_capture_workers(self):
+        for workers in (1, 2, 3):
+            self.assertEqual(self.service.output_limits(payload(workers=workers)),
+                             (CONFIG['maxOutputBytes'], CONFIG['maxResponseBytes']))
+        for workers in (0, 4, 1.5, None):
+            with self.assertRaises(ValueError):
+                self.service.output_limits(payload(workers=workers))
+
+
 class BootstrapTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -455,6 +503,17 @@ class BootstrapTests(unittest.TestCase):
             graphics.dispatch(handler, Pace(), Pace())
             self.assertNotIn(ALPHA, json.loads(handler.wfile.getvalue()).get('kinds', []))
             self.assertEqual(handler.path, path)
+
+    def test_two_graphics_jobs_count_in_health(self):
+        self.worker.busy = {'cpu': 0, 'gpu': 0}
+        graphics = self.create()
+        first, second = graphics.motion.acquire_gpu(), graphics.maps.acquire_gpu()
+        health = self.worker.health()
+        self.assertEqual((health['graphicsBusy'], health['graphicsCapacity']), (2, 2))
+        first(); first()
+        self.assertEqual(self.worker.health()['graphicsBusy'], 1, 'double release counts once')
+        second()
+        self.assertEqual(self.worker.health()['graphicsBusy'], 0)
 
     def test_alpha_and_maps_use_same_shared_lease_and_health_accounting(self):
         graphics = self.create()

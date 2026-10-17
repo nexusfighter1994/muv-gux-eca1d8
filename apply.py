@@ -51,6 +51,9 @@ _wordsync_spec.loader.exec_module(_wordsync_install)
 _broll_spec = importlib.util.spec_from_file_location('vf_broll_reuse_install', HERE / 'broll-reuse-install.py')
 _broll_install = importlib.util.module_from_spec(_broll_spec)
 _broll_spec.loader.exec_module(_broll_install)
+_proc_spec = importlib.util.spec_from_file_location('vf_proc_scan_install', HERE / 'proc-scan-cache-install.py')
+_proc_install = importlib.util.module_from_spec(_proc_spec)
+_proc_spec.loader.exec_module(_proc_install)
 FRAMESHIFT_LIB = Path(os.environ.get('VF_FRAMESHIFT_LIB', str(DIST.parent.parent / 'render' / 'frameshift' / 'lib')))
 
 
@@ -459,6 +462,7 @@ def node():
         text = _route_install.patch_node(text)
         text = _wordsync_install.patch_node(text)
         text = _broll_install.patch_node(text)
+        text = _proc_install.patch_node(text)
         note('node.homeQueue', True)
         write(bundle, text, crlf)
         note('node.bundle', True, 'already patched')
@@ -646,6 +650,7 @@ def node():
     text = _route_install.patch_node(text)
     text = _wordsync_install.patch_node(text)
     text = _broll_install.patch_node(text)
+    text = _proc_install.patch_node(text)
     write(bundle, text, crlf)
     (target / 'hooks-build.json').write_text(json.dumps({'fingerprints': {**found, 'app': app, 'owner': owner, 'db': db}, 'report': report}, indent=1))
 
@@ -676,7 +681,7 @@ def ui():
     if MARK not in text and '</head>' in text:
         tags = ('    <!-- vf-custom -->\n'
                 '    <link rel="stylesheet" href="/assets/pc-boost-settings-20261002.css?v=bandwidth25-20261011b">\n'
-                '    <script type="module" src="/assets/pc-boost-settings-20261002.js?v=connection-status-20261014a"></script>\n'
+                '    <script type="module" src="/assets/pc-boost-settings-20261002.js?v=graphics-slots-20261017a"></script>\n'
                 '    <link rel="stylesheet" href="/assets/pc-transfer-settings-20261011.css?v=size-20261011b">\n'
                 '    <script type="module" src="/assets/pc-transfer-settings-20261011.js?v=size-nvenc-20261013a"></script>\n'
                 '    <script type="module" src="/assets/vf-custom-tab.js?v=vfc1"></script>\n')
@@ -688,7 +693,7 @@ def ui():
             for extension in ('js', 'css'):
                 text = re.sub(
                     rf'(/assets/pc-boost-settings-20261002\.{extension})\?v=[^"\s]+',
-                    r'\1?v=connection-status-20261014a' if extension == 'js' else r'\1?v=bandwidth25-20261011b', text)
+                    r'\1?v=graphics-slots-20261017a' if extension == 'js' else r'\1?v=bandwidth25-20261011b', text)
             additions = ''
             for extension in ('js', 'css'):
                 text = re.sub(

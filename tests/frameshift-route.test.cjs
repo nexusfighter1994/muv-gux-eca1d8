@@ -144,7 +144,7 @@ test('lease without AbortSignal: watchdog aborts the Home render when the lease 
   assert.equal(route.stats.watchdog, 1);
 });
 
-test('only one concurrent Home offer (Home has one graphics slot); slot freed before server fallback', async () => {
+test('two concurrent Home offers (Home has two graphics slots); a third renders on the server', async () => {
   const als = new AsyncLocalStorage();
   const lease = { resourceKey: 'frameshift', released: false, parked: false, signal: new AbortController().signal };
   const scope = { jobId: 'job', lanes: new Set(['render']), leases: new Map([['render', lease]]) };
@@ -156,13 +156,15 @@ test('only one concurrent Home offer (Home has one graphics slot); slot freed be
     loadAlpha: async () => ({ createAlphaHook: hook }), loadOpaque: async () => ({ createMotionHook: hook }) });
   const render = route.wrap(async () => { native++; return { native: true }; });
   const first = als.run(scope, () => render({ ...base, compositionHtml: OPAQUE, workers: 3 }));
+  const second = als.run(scope, () => render({ ...base, compositionHtml: OPAQUE, workers: 3 }));
   await new Promise(r => setImmediate(r));
   assert.deepEqual(await als.run(scope, () => render({ ...base, compositionHtml: OPAQUE, workers: 3 })), { native: true });
   assert.equal(route.stats.reasons.home_busy, 1);
   release();
   assert.deepEqual(await first, { home: true });
-  assert.deepEqual(await als.run(scope, () => render({ ...base, compositionHtml: OPAQUE, workers: 3 })), { home: true }, 'slot released after success');
-  assert.equal(homeCalls, 2);
+  assert.deepEqual(await second, { home: true });
+  assert.deepEqual(await als.run(scope, () => render({ ...base, compositionHtml: OPAQUE, workers: 3 })), { home: true }, 'slots released after success');
+  assert.equal(homeCalls, 3);
 });
 
 test('wrap is idempotent', () => {

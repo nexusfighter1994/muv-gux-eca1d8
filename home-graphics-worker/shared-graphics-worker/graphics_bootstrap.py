@@ -43,20 +43,20 @@ class Graphics:
         self.maps.kinds = ('map-v1',)
         self.maps.transfer_limits = self.motion.transfer_limits
         self.counts, self.lock = {'completedMap': 0, 'completedMotion': 0, 'completedAlpha': 0}, threading.Lock()
-        self.active = False
+        self.active = 0
         native_acquire = self.motion.acquire_gpu
         def acquire():
             with worker.lock:
                 release = native_acquire()
                 if not callable(release): return None
-                self.active = True
+                self.active += 1
             released = False
             def tracked_release():
                 nonlocal released
                 with worker.lock:
                     if not released:
                         release()
-                        self.active = False
+                        self.active -= 1
                         released = True
             return tracked_release
         self.maps.acquire_gpu = self.motion.acquire_gpu = acquire
@@ -71,7 +71,7 @@ class Graphics:
             service.render = counted
 
     def health(self):
-        with self.lock: return dict(self.counts, graphicsBusy=int(self.active), graphicsCapacity=1)
+        with self.lock: return dict(self.counts, graphicsBusy=int(self.active), graphicsCapacity=getattr(self.motion, 'slots', 1))
 
     def dispatch(self, handler, down, up):
         original = handler.path

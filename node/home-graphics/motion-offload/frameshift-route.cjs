@@ -60,7 +60,7 @@ function leaseSignal(signals, valid, pollMs = 2000) {
 }
 
 function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted, getConfig, loadOpaque, loadAlpha,
-  opaqueUrl, alphaUrl, reserveRatio = 0.3, healthTimeoutMs = 5000, maxSamples = 12, maxRemote = 1 }) {
+  opaqueUrl, alphaUrl, reserveRatio = 0.3, healthTimeoutMs = 5000, maxSamples = 12, maxRemote = 2 }) {
   // Persisted install runs before the native scheduler initialises: accept a getter.
   if (!jp && typeof getJobs === 'function') jp = { get: id => getJobs()?.get?.(id) };
   // Home has ONE graphics slot: extra concurrent offers would upload, get "busy" and

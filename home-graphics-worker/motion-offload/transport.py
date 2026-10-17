@@ -5,6 +5,32 @@ MAX_ARTIFACT = 32 * 1024 * 1024
 MAX_OUTPUT = 128 * 1024 * 1024
 MAX_RESPONSE = 176 * 1024 * 1024
 ALPHA_KIND = 'frameshift-alpha-v1'
+# Parallel graphics jobs on the PC (motion and maps share this gate; each also takes a
+# GPU lease from the existing six-slot budget). The PC has the cores and RAM for two.
+GRAPHICS_SLOTS = 2
+
+
+class GraphicsGate:
+    """Counting, non-blocking gate for parallel graphics jobs; locked() = any slot held."""
+    def __init__(self, slots):
+        self.slots, self._used, self._lock = slots, 0, threading.Lock()
+
+    def acquire(self, blocking=False):
+        with self._lock:
+            if self._used >= self.slots:
+                return False
+            self._used += 1
+            return True
+
+    def release(self):
+        with self._lock:
+            if self._used <= 0:
+                raise RuntimeError('release unlocked graphics gate')
+            self._used -= 1
+
+    def locked(self):
+        with self._lock:
+            return self._used > 0
 OPAQUE_KIND = 'frameshift-opaque-v1'
 
 
@@ -38,7 +64,8 @@ class MotionService:
         self.max_output_bytes = max_output_bytes
         self.max_response_bytes = max_response_bytes
         self.transfer_limits = transfer_limits
-        self.slot, self.lock, self.jobs = threading.Lock(), threading.Lock(), {}
+        self.slots = GRAPHICS_SLOTS
+        self.slot, self.lock, self.jobs = GraphicsGate(GRAPHICS_SLOTS), threading.Lock(), {}
         self.cancelled = {}
         self.quarantined = False
         self.quarantine_directory = None
@@ -48,7 +75,7 @@ class MotionService:
         if kind is not None and kind not in self.kinds:
             raise ValueError('unsupported motion kind')
         if kind == ALPHA_KIND:
-            if data.get('version') != 1 or data.get('format') != 'mov' or data.get('workers') != 1:
+            if data.get('version') != 1 or data.get('format') != 'mov' or data.get('workers') not in (1, 2, 3):
                 raise ValueError('alpha protocol/format')
             return self.max_output_bytes, self.max_response_bytes
         if isinstance(data, dict) and data.get('format') not in (None, 'mp4'):
@@ -201,7 +228,7 @@ class MotionService:
 def dispatch_motion(handler, service, data):
     """Call AFTER existing auth/body-size parsing; returns whether a route matched."""
     if handler.path == '/motion/health' and handler.command == 'GET':
-        handler.respond(200, {'version': 1, 'contract': service.contract, 'slots': 1,
+        handler.respond(200, {'version': 1, 'contract': service.contract, 'slots': getattr(service, 'slots', 1),
                               'kinds': list(service.kinds)})
     elif handler.path == '/motion/render' and handler.command == 'POST':
         handler.respond(200, service.render(data))

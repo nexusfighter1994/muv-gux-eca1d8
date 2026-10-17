@@ -105,7 +105,7 @@ export function createAlphaHook(nativeRender, {endpoint, token, contract, permit
       const healthSignal = Number.isFinite(healthTimeoutMs) && healthTimeoutMs > 0
         ? AbortSignal.any([controller.signal, AbortSignal.timeout(Math.ceil(healthTimeoutMs))]) : controller.signal;
       const health = await readJson(await fetchImpl(new URL('/motion/health', base), {headers, signal: healthSignal}), 16384, healthSignal);
-      if (health.version !== 1 || health.contract !== contract || health.slots !== 1
+      if (health.version !== 1 || health.contract !== contract || !Number.isInteger(health.slots) || health.slots < 1
         || !Array.isArray(health.kinds) || !health.kinds.includes(KIND)) throw Error('alpha health contract');
       await active();
       controller.signal.throwIfAborted();
@@ -113,7 +113,7 @@ export function createAlphaHook(nativeRender, {endpoint, token, contract, permit
       if (remaining < 1) throw Error('remote deadline exhausted');
       const p = validate({version: 1, id, contract, kind: KIND, format: options.format,
         compositionHtml: options.compositionHtml, renderOnlyHtml: options.renderOnlyHtml ?? '', assets,
-        fps: options.fps, resolution: options.resolution, workers: 1, sourceWorkers: options.workers ?? 1,
+        fps: options.fps, resolution: options.resolution, workers: options.workers ?? 1, sourceWorkers: options.workers ?? 1,
         quality: options.quality ?? 'standard', duration, timeoutMs: remaining}, contract);
       possibleRemote = true;
       endRemote = remoteActive.begin('frameshift');

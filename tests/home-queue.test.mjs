@@ -191,7 +191,7 @@ test('Home dispatch and server fallback have separate nonzero RAM estimates with
   const original=req=>{calls.push(req.resourceKey);return {mb:req.resourceKey==='fflowComposition'?1536:0,
     source:'cold',sampleCount:0,profileKey:req.resourceKey}};
   const wrapped=module.wrapHomeRamEstimate(original);
-  assert.equal(wrapped({resourceKey:'ffmpegHome'}).mb,512);
+  assert.equal(wrapped({resourceKey:'ffmpegHome'}).mb,160);
   assert.equal(wrapped({resourceKey:'ffmpegHomeFallback'}).mb,1536);
   assert.equal(wrapped({resourceKey:'fflowComposition'}).mb,1536);
   assert.equal(wrapped({resourceKey:'other'}).mb,0);
@@ -200,6 +200,18 @@ test('Home dispatch and server fallback have separate nonzero RAM estimates with
   assert.equal(learned({resourceKey:'ffmpegHomeFallback'}).mb,1536);
   assert.equal(learned({resourceKey:'ffmpegHomeTrimFallback'}).mb,512);
   assert.equal(learned({resourceKey:'fflowComposition'}).mb,6,'Native budget evidence is not rewritten');
+});
+
+test('hot upgrade: a running v5 wrapper (512 MB) is overridden once; v6 is idempotent',()=>{
+  const native=req=>({mb:req.resourceKey==='fflowComposition'?1536:0,source:'cold',sampleCount:0,profileKey:req.resourceKey});
+  const v5=req=>(req.resourceKey==='ffmpegHome'?{...native(req),mb:512}:native(req));
+  v5.__vfHomeRamVersion='home-only-v5';
+  const v6=module.wrapHomeRamEstimate(v5);
+  assert.notEqual(v6,v5);
+  assert.equal(v6({resourceKey:'ffmpegHome'}).mb,module.HOME_DISPATCH_MB);
+  assert.equal(module.HOME_DISPATCH_MB,160);
+  assert.equal(v6({resourceKey:'fflowComposition'}).mb,1536);
+  assert.equal(module.wrapHomeRamEstimate(v6),v6);
 });
 
 test('only verified remote-only RAM evidence is excluded from the native composition learner',async()=>{

@@ -12,7 +12,7 @@ const execFile=promisify(cp.execFile);
 export const MAX=32*1024*1024;
 export function validate(p,contract){
   if(!Number.isInteger(p.timeoutMs)||p.timeoutMs<1||p.timeoutMs>600000)throw Error('deadline');
-  if(p.version!==1||p.contract!==contract||!/^[a-f0-9]{32}$/.test(p.id)||p.fps!==24||p.resolution!=='1920x1080'||p.workers!==1||!['draft','standard','high'].includes(p.quality)||!Number.isFinite(p.duration)||p.duration<=0||p.duration>15)throw Error('contract');
+  if(p.version!==1||p.contract!==contract||!/^[a-f0-9]{32}$/.test(p.id)||p.fps!==24||p.resolution!=='1920x1080'||!(Number.isInteger(p.workers)&&p.workers>=1&&p.workers<=3)||!['draft','standard','high'].includes(p.quality)||!Number.isFinite(p.duration)||p.duration<=0||p.duration>15)throw Error('contract');
   if(typeof p.compositionHtml!=='string'||Buffer.byteLength(p.compositionHtml)>2*1024*1024||typeof p.renderOnlyHtml!=='string'||Buffer.byteLength(p.renderOnlyHtml)>2*1024*1024||!Array.isArray(p.assets)||p.assets.length>32)throw Error('payload');
   const names=new Set();let total=0;
   for(const a of p.assets){if(!/^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,200}$/.test(a.filename)||a.filename.includes('..')||names.has(a.filename)||typeof a.data!=='string')throw Error('asset');names.add(a.filename);const b=Buffer.from(a.data,'base64');total+=b.length;if(hash(b)!==a.sha256||total>MAX)throw Error('asset hash/size');}
@@ -40,7 +40,7 @@ export async function execute(p,config){
     const original=cp.spawn;
     cp.spawn=function(command,args,options){return /(?:^|[/\\])hyperframes(?:\.cmd)?$/.test(command)?original(process.execPath,[config.cli,...args,...(args[0]==='render'?['--debug']:[])],options):original(command,args,options);};syncBuiltinESMExports();
     const native=await import(pathToFileURL(config.renderModule));
-    await native.render({compositionHtml:p.compositionHtml,renderOnlyHtml:p.renderOnlyHtml,assets,fps:p.fps,resolution:p.resolution,workers:1,quality:p.quality,targetPath:output,workDir:root,timeoutMs:p.timeoutMs});
+    await native.render({compositionHtml:p.compositionHtml,renderOnlyHtml:p.renderOnlyHtml,assets,fps:p.fps,resolution:p.resolution,workers:p.workers,quality:p.quality,targetPath:output,workDir:root,timeoutMs:p.timeoutMs});
     const probe=await verify(output,p,config.ffprobe,config.ffmpeg);const bytes=await fs.readFile(output);if(bytes.length>MAX)throw Error('output size');
     let backend=null;const scan=async dir=>{for(const e of await fs.readdir(dir,{withFileTypes:true})){const f=path.join(dir,e.name);if(e.isDirectory())await scan(f);else if(e.name==='perf-summary.json'){const s=await fs.readFile(f,'utf8');if(/"gpuRenderer"\s*:\s*"d3d11\/nvidia"/.test(s))backend='d3d11/nvidia';}}};await scan(root);
     if(!backend)throw Error('hardware proof missing');
