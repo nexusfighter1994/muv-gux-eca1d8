@@ -231,6 +231,24 @@ test('parallel proof fails closed: software probe, probe error, unclamped screen
   });
 });
 
+test('compile-gated screenshot capture (e.g. mix_blend_mode) is proven by the probe too', async () => {
+  const {execute, proveBackend} = await worker();
+  await temporary(async root => {
+    let probes = 0;
+    const result = await execute(payload(), {contract, jobRoot: root}, {
+      renderNative: async o => { await fs.copyFile(await fixture(o.workDir), o.targetPath); await parallelPerf(o.workDir, {clampReason: undefined, compileGate: 'mix_blend_mode'}); },
+      probeGpu: async () => { probes++; return 'd3d11/nvidia'; }});
+    assert.equal(result.backend, 'd3d11/nvidia');
+    assert.equal(probes, 1);
+  });
+  const probe = async () => 'd3d11/nvidia';
+  for (const d of [{mode: 'screenshot', compileGate: ''}, {mode: 'drawelement', compileGate: 'mix_blend_mode'},
+    {mode: 'screenshot', compileGate: 'mix_blend_mode', gpuRenderer: 'swiftshader/other'}, {mode: 'screenshot', compileGate: 7}]) {
+    await assert.rejects(proveBackend([d], probe), /hardware proof/);
+  }
+  await assert.rejects(proveBackend([{mode: 'screenshot', compileGate: 'mix_blend_mode'}], async () => 'swiftshader/other'), /hardware proof/);
+});
+
 test('single-worker evidence never launches the probe', async () => {
   const {execute} = await worker();
   await temporary(async root => {

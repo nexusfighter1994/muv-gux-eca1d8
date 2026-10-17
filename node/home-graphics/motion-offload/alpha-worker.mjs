@@ -191,18 +191,23 @@ export async function probeHardwareGpu(config, workDir) {
   }
 }
 
-// Parallel capture (workers > 1) clamps the renderer to screenshot mode and skips its WebGL
-// probe, so those perf summaries carry no gpuRenderer. Their frames equal the 1-worker
-// screenshot path; the backend is then proven by probing the same pinned browser.
+// The renderer runs its WebGL probe only on the drawElement path. Parallel capture
+// (workers > 1, clampReason "parallel") and compositions the drawElement compile gate
+// rejects (e.g. compileGate "mix_blend_mode") capture by screenshot without it, so those
+// perf summaries carry no gpuRenderer. Screenshot frames match the server's capture; the
+// backend is then proven by probing the same pinned browser.
+const unprobedScreenshot = d => d && d.gpuRenderer === undefined && d.mode === 'screenshot'
+  && (d.clampReason === 'parallel' || (typeof d.compileGate === 'string' && d.compileGate !== ''));
+
 export async function proveBackend(perfs, probe) {
   if (!perfs.length) throw Error('hardware proof missing');
-  let parallel = false;
+  let unprobed = false;
   for (const d of perfs) {
     if (d?.gpuRenderer === 'd3d11/nvidia') continue;
-    if (d && d.gpuRenderer === undefined && d.mode === 'screenshot' && d.clampReason === 'parallel') { parallel = true; continue; }
+    if (unprobedScreenshot(d)) { unprobed = true; continue; }
     throw Error('hardware proof missing');
   }
-  if (parallel && await probe().catch(() => null) !== 'd3d11/nvidia') throw Error('hardware proof missing');
+  if (unprobed && await probe().catch(() => null) !== 'd3d11/nvidia') throw Error('hardware proof missing');
   return 'd3d11/nvidia';
 }
 
