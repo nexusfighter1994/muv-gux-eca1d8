@@ -5,9 +5,10 @@ MAX_ARTIFACT = 32 * 1024 * 1024
 MAX_OUTPUT = 128 * 1024 * 1024
 MAX_RESPONSE = 176 * 1024 * 1024
 ALPHA_KIND = 'frameshift-alpha-v1'
-# Parallel graphics jobs on the PC (motion and maps share this gate; each also takes a
-# GPU lease from the existing six-slot budget). The PC has the cores and RAM for two.
-GRAPHICS_SLOTS = 2
+# Upper bound of parallel graphics jobs on the PC (motion and maps share this gate; each
+# also takes a GPU lease from the existing six-slot budget). The server decides how many
+# it actually offers (PC Boost setting motionSlots, 1..4).
+GRAPHICS_SLOTS = 4
 
 
 class GraphicsGate:

@@ -3,6 +3,8 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {configureMotion} from './binding.mjs';
 import {patchBundle} from './install.mjs';
+import motionLimitsModule from './motion-limits.cjs';
+const {motionLimits}=motionLimitsModule;
 
 export function patchPristine(source,{bindingModulePath='./vf-custom/motion-offload/binding.mjs'}={}){
   return patchBundle(source,bindingModulePath);
@@ -23,8 +25,11 @@ export function installMotionOffload({modEnabled,contractFile=new URL('./motion-
     const getToken=()=>{
       try{const token=readFile(env.VF_PC_BOOST_TOKEN_FILE||'/data/runtime/pc-boost-token','utf8').trim();return token.length>=16&&token.length<=4096&&!/[\r\n]/.test(token)?token:'';}catch{return '';}
     };
+    // Read per render: motionSlots / motionHomeShare change live from the PC Boost settings.
     const getSettings=()=>{
-      try{return {homeMotion:modEnabled('homeMotion')===true&&JSON.parse(readFile(env.VF_PC_BOOST_CONFIG||'/data/runtime/pc-boost.json','utf8')).enabled===true&&Boolean(getToken())};}catch{return {homeMotion:false};}
+      try{const config=JSON.parse(readFile(env.VF_PC_BOOST_CONFIG||'/data/runtime/pc-boost.json','utf8'));
+        return {homeMotion:modEnabled('homeMotion')===true&&config.enabled===true&&Boolean(getToken()),...motionLimits(config)};}
+      catch{return {homeMotion:false,...motionLimits(null)};}
     };
     // Home may use up to 70% of the render deadline; a server CPU fallback then
     // still gets the FULL original deadline. A dead Home PC fails the 5 s health probe.

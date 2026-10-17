@@ -413,17 +413,18 @@ class AlphaTransportTests(unittest.TestCase):
 
 
 class GraphicsSlotTests(unittest.TestCase):
-    """Two graphics jobs may run at once when the GPU budget allows; a third waits (503)."""
-    def test_two_parallel_jobs_then_motion_busy(self):
+    """Up to four graphics jobs may run at once when the GPU budget allows; a fifth waits (503)."""
+    def test_four_parallel_jobs_then_motion_busy(self):
         w = worker()
         w.busy = {'cpu': 0, 'gpu': 0}
         service = make_service(w)
-        self.assertEqual(service.slots, 2)
-        self.assertTrue(service.slot.acquire(False))
-        self.assertTrue(service.slot.acquire(False))
-        self.assertFalse(service.slot.acquire(False), 'third graphics job must wait')
+        self.assertEqual(service.slots, 4)
+        for _ in range(4):
+            self.assertTrue(service.slot.acquire(False))
+        self.assertFalse(service.slot.acquire(False), 'fifth graphics job must wait')
         self.assertTrue(service.slot.locked())
-        service.slot.release(); service.slot.release()
+        for _ in range(4):
+            service.slot.release()
         self.assertFalse(service.slot.locked())
         with self.assertRaises(RuntimeError):
             service.slot.release()
@@ -509,7 +510,7 @@ class BootstrapTests(unittest.TestCase):
         graphics = self.create()
         first, second = graphics.motion.acquire_gpu(), graphics.maps.acquire_gpu()
         health = self.worker.health()
-        self.assertEqual((health['graphicsBusy'], health['graphicsCapacity']), (2, 2))
+        self.assertEqual((health['graphicsBusy'], health['graphicsCapacity']), (2, transport.GRAPHICS_SLOTS))
         first(); first()
         self.assertEqual(self.worker.health()['graphicsBusy'], 1, 'double release counts once')
         second()

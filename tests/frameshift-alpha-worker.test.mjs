@@ -249,6 +249,21 @@ test('compile-gated screenshot capture (e.g. mix_blend_mode) is proven by the pr
   await assert.rejects(proveBackend([{mode: 'screenshot', compileGate: 'mix_blend_mode'}], async () => 'swiftshader/other'), /hardware proof/);
 });
 
+test('alphaExtrema equals a full byte loop for every chunk shape', async () => {
+  const {alphaExtrema} = await worker();
+  const naive = (chunks) => { let min = 255, max = 0; for (const c of chunks) for (const v of c) { if (v < min) min = v; if (v > max) max = v; } return {min, max}; };
+  let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const shapes = [() => Buffer.alloc(64, 255), () => Buffer.alloc(64, 0), () => Buffer.alloc(64, 128),
+    () => Buffer.from(Array.from({length: 64}, () => 1 + Math.floor(rnd() * 253))),
+    () => Buffer.from(Array.from({length: 64}, () => Math.floor(rnd() * 256)))];
+  for (let n = 0; n < 200; n++) {
+    const chunks = Array.from({length: 1 + Math.floor(rnd() * 4)}, () => shapes[Math.floor(rnd() * shapes.length)]());
+    let state = {min: 255, max: 0};
+    for (const c of chunks) state = alphaExtrema(c, state.min, state.max);
+    assert.deepEqual(state, naive(chunks));
+  }
+});
+
 test('single-worker evidence never launches the probe', async () => {
   const {execute} = await worker();
   await temporary(async root => {

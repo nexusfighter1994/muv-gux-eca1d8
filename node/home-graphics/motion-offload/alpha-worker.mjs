@@ -75,6 +75,20 @@ export function checkProbe(result, p) {
   return v;
 }
 
+// Same extrema as a full byte loop, but native indexOf finds 0/255 (the usual alpha
+// extremes) without a JS pass over every pixel on the server's main thread.
+export function alphaExtrema(chunk, min = 255, max = 0) {
+  if (min > 0) {
+    if (chunk.indexOf(0) !== -1) min = 0;
+    else for (const value of chunk) if (value < min) min = value;
+  }
+  if (max < 255) {
+    if (chunk.indexOf(255) !== -1) max = 255;
+    else for (const value of chunk) if (value > max) max = value;
+  }
+  return {min, max};
+}
+
 // Decode every frame, retaining only alpha extrema and byte count (bounded memory).
 function scanAlpha(file, frames, ffmpeg, signal) {
   signal?.throwIfAborted();
@@ -94,7 +108,7 @@ function scanAlpha(file, frames, ffmpeg, signal) {
     child.stdout.on('data', chunk => {
       pixels += chunk.length;
       if (pixels > expected) return stop(Error('alpha decoded frame count'));
-      for (const value of chunk) { if (value < min) min = value; if (value > max) max = value; }
+      ({min, max} = alphaExtrema(chunk, min, max));
     });
     child.stderr.on('data', chunk => { diagnostic = (diagnostic + chunk.toString()).slice(-2000); });
     child.once('close', code => {

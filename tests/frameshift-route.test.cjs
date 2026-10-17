@@ -171,3 +171,66 @@ test('wrap is idempotent', () => {
   const s = setup();
   assert.equal(s.route.wrap(s.render), s.render);
 });
+
+function liveRoute(settings, extra = {}) {
+  const als = new AsyncLocalStorage();
+  const lease = { resourceKey: 'frameshift', released: false, parked: false, signal: new AbortController().signal };
+  const scope = { jobId: 'job', lanes: new Set(['render']), leases: new Map([['render', lease]]) };
+  const gates = [], ratios = [];
+  let native = 0;
+  const hook = (fallback, cfg) => async () => { ratios.push(cfg.nativeReserveRatio); await new Promise(r => gates.push(r)); return { home: true }; };
+  const route = createFrameshiftRoute({ RU: () => 'job', getStore: () => als.getStore(), mF: () => 'render', jp: new Map(), Xl: () => null,
+    isJobAborted: () => false, getConfig: () => ({ getSettings: () => ({ homeMotion: true, ...settings }), getToken: () => 't', contract: 'c' }),
+    loadAlpha: async () => ({ createAlphaHook: hook }), loadOpaque: async () => ({ createMotionHook: hook }), ...extra });
+  const render = route.wrap(async () => { native++; return { native: true }; });
+  const run = () => als.run(scope, () => render({ ...base, compositionHtml: OPAQUE, workers: 3 }));
+  return { route, run, gates, ratios, nativeCount: () => native };
+}
+const tick = () => new Promise(r => setImmediate(r));
+
+test('motionSlots from the live PC Boost settings bounds parallel Home offers (changes apply to the next offer)', async () => {
+  const settings = { motionSlots: 3 };
+  const r = liveRoute(settings);
+  const running = [r.run(), r.run(), r.run()];
+  await tick();
+  assert.deepEqual(await r.run(), { native: true }, 'fourth offer with 3 slots goes native');
+  settings.motionSlots = 4;
+  const fourth = r.run();
+  await tick();
+  assert.equal(r.gates.length, 4);
+  assert.deepEqual(r.route.stats.limits, { slots: 4, reserveRatio: 0.3 });
+  r.gates.forEach(release => release());
+  for (const p of [...running, fourth]) assert.deepEqual(await p, { home: true });
+  assert.equal(r.nativeCount(), 1);
+});
+
+test('invalid motionSlots keep the default of 2; the slot cap is 4', async () => {
+  for (const motionSlots of [0, 5, 2.5, '3', null]) {
+    const r = liveRoute({ motionSlots });
+    const a = r.run(), b = r.run();
+    await tick();
+    assert.deepEqual(await r.run(), { native: true }, 'default limit 2 for ' + motionSlots);
+    r.gates.forEach(release => release());
+    await Promise.all([a, b]);
+  }
+});
+
+test('motionHomeShare sets the Home share of the deadline (nativeReserveRatio); invalid values keep 0.3', async () => {
+  for (const [share, ratio] of [[90, 0.1], [50, 0.5], [70, 0.3], [95, 0.3], [49, 0.3], [undefined, 0.3]]) {
+    const r = liveRoute({ motionHomeShare: share });
+    const p = r.run();
+    await tick();
+    assert.ok(Math.abs(r.ratios[0] - ratio) < 1e-9, `share ${share} -> ${r.ratios[0]}`);
+    r.gates.forEach(release => release());
+    await p;
+  }
+});
+
+test('a rebuilt route can share the running bypass scope; a bad bypass is rejected', async () => {
+  const first = liveRoute({});
+  const second = liveRoute({}, { bypass: first.route.bypass });
+  assert.equal(second.route.bypass, first.route.bypass);
+  assert.deepEqual(await first.route.bypass.run(true, () => second.run()), { native: true }, 'fallback of the old route is not re-offered');
+  assert.equal(second.gates.length, 0);
+  assert.throws(() => liveRoute({}, { bypass: {} }), /bypass must be an AsyncLocalStorage/);
+});

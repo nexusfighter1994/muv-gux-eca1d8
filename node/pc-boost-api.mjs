@@ -12,6 +12,10 @@ export const DEFAULT_CONFIG = Object.freeze({
   // v17: server concurrency while the PC is verified connected (0 = no boost; only ever raises).
   clipvaultBoost: 40,
   ffmpegBoost: 0,
+  // Home motion graphics: parallel Home renders the server offers, and the share (%) of a
+  // render's deadline Home may use before the server renders it itself (fresh full deadline).
+  motionSlots: 2,
+  motionHomeShare: 70,
 });
 // Settings the PC worker knows; the boost targets above stay on the server.
 export const PC_CONFIG_KEYS = Object.freeze(['enabled', 'cpuWorkers', 'gpuWorkers', 'siglipEnabled', 'siglipConcurrency', 'sceneWorkers']);
@@ -22,6 +26,8 @@ export const CONFIG_BOUNDS = Object.freeze({
   sceneWorkers: Object.freeze({ min: 0, max: 25 }),
   clipvaultBoost: Object.freeze({ min: 0, max: 200 }),
   ffmpegBoost: Object.freeze({ min: 0, max: 64 }),
+  motionSlots: Object.freeze({ min: 1, max: 4 }),
+  motionHomeShare: Object.freeze({ min: 50, max: 90 }),
 });
 const RUNTIME_PATH = '/data/runtime/pc-boost.json';
 const TOKEN_PATH = '/data/runtime/pc-boost-token';
@@ -232,6 +238,11 @@ export function publishConfig(runtimePath, config) {
   }
 }
 
+// Motion keys live in their own row: an older image validating the pc_boost row strictly
+// would otherwise treat unknown keys as corrupt and fall back to defaults (PC Boost off).
+export const MOTION_CONFIG_KEYS = Object.freeze(['motionSlots', 'motionHomeShare']);
+const pick = (config, keep) => Object.fromEntries(Object.entries(config).filter(([key]) => MOTION_CONFIG_KEYS.includes(key) === keep));
+
 export function createConfigStore({ db, runtimePath = RUNTIME_PATH,
   publish = config => publishConfig(runtimePath, config) }) {
   const select = db.prepare('SELECT value_json FROM app_settings WHERE key = ?');
@@ -239,10 +250,18 @@ export function createConfigStore({ db, runtimePath = RUNTIME_PATH,
   let current = { ...DEFAULT_CONFIG };
   const row = select.get('pc_boost');
   if (row) {
-    try { current = validateConfig(JSON.parse(row.value_json)); } catch { /* Corrupt settings fail closed. */ }
+    try { current = validateConfig(pick(JSON.parse(row.value_json), false)); } catch { /* Corrupt settings fail closed. */ }
   }
+  const motion = select.get('pc_motion');
+  if (motion) {
+    try { current = validateConfig(pick(JSON.parse(motion.value_json), true), current); } catch { /* Corrupt motion limits keep defaults. */ }
+  }
+  const store = config => {
+    write.run('pc_boost', JSON.stringify(pick(config, false)));
+    write.run('pc_motion', JSON.stringify(pick(config, true)));
+  };
   db.transaction(() => {
-    write.run('pc_boost', JSON.stringify(current));
+    store(current);
     publish(current);
   })();
   return {
@@ -252,7 +271,7 @@ export function createConfigStore({ db, runtimePath = RUNTIME_PATH,
       let published = false;
       try {
         db.transaction(() => {
-          write.run('pc_boost', JSON.stringify(next));
+          store(next);
           publish(next);
           published = true;
         })();

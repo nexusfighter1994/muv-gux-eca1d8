@@ -681,7 +681,7 @@ def ui():
     if MARK not in text and '</head>' in text:
         tags = ('    <!-- vf-custom -->\n'
                 '    <link rel="stylesheet" href="/assets/pc-boost-settings-20261002.css?v=bandwidth25-20261011b">\n'
-                '    <script type="module" src="/assets/pc-boost-settings-20261002.js?v=graphics-slots-20261017a"></script>\n'
+                '    <script type="module" src="/assets/pc-boost-settings-20261002.js?v=motion-settings-20261017a"></script>\n'
                 '    <link rel="stylesheet" href="/assets/pc-transfer-settings-20261011.css?v=size-20261011b">\n'
                 '    <script type="module" src="/assets/pc-transfer-settings-20261011.js?v=size-nvenc-20261013a"></script>\n'
                 '    <script type="module" src="/assets/vf-custom-tab.js?v=vfc1"></script>\n')
@@ -693,7 +693,7 @@ def ui():
             for extension in ('js', 'css'):
                 text = re.sub(
                     rf'(/assets/pc-boost-settings-20261002\.{extension})\?v=[^"\s]+',
-                    r'\1?v=graphics-slots-20261017a' if extension == 'js' else r'\1?v=bandwidth25-20261011b', text)
+                    r'\1?v=motion-settings-20261017a' if extension == 'js' else r'\1?v=bandwidth25-20261011b', text)
             additions = ''
             for extension in ('js', 'css'):
                 text = re.sub(

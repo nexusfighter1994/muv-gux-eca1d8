@@ -1,4 +1,6 @@
-const FIELD_KEYS = ['enabled', 'cpuWorkers', 'gpuWorkers', 'siglipEnabled', 'siglipConcurrency', 'sceneWorkers', 'clipvaultBoost', 'ffmpegBoost'];
+const FIELD_KEYS = ['enabled', 'cpuWorkers', 'gpuWorkers', 'siglipEnabled', 'siglipConcurrency', 'sceneWorkers', 'clipvaultBoost', 'ffmpegBoost', 'motionSlots', 'motionHomeShare'];
+// Shown when an older server does not report these yet (its fixed behaviour).
+const FIELD_DEFAULTS = { motionSlots: 2, motionHomeShare: 70 };
 const STATUS_REQUEST_TIMEOUT_MS = 6500;
 
 function currentWorkerHealth(health, kind) {
@@ -53,6 +55,14 @@ class PcBoostSettings extends HTMLElement {
                   <label>FFmpeg concurrency<input class="vc-input" name="ffmpegBoost" type="number" min="0" max="64" step="1" required></label>
                 </div>
                 <p class="vf-pc-boost__boost-state" data-boost-state role="status">Boost status unavailable</p>
+              </div>
+              <div class="vf-pc-boost__boost">
+                <h3 class="vf-pc-boost__subtitle">Home PC motion graphics</h3>
+                <p class="vc-muted vf-pc-boost__hint">Parallel motion graphics the server offers to the home PC, and how much of a graphic's render deadline the PC may use. When the PC takes longer, the server renders that graphic itself with its full deadline. Applies to the next graphic, no restart.</p>
+                <div class="vf-pc-boost__limits">
+                  <label>Parallel motion graphics<input class="vc-input" name="motionSlots" type="number" min="1" max="4" step="1" required></label>
+                  <label>Home PC time share (%)<input class="vc-input" name="motionHomeShare" type="number" min="50" max="90" step="5" required></label>
+                </div>
               </div>
             </fieldset>
             <div class="vf-pc-boost__telemetry" aria-label="PC worker status">
@@ -209,7 +219,7 @@ class PcBoostSettings extends HTMLElement {
       const input = this.form.elements.namedItem(key);
       if (input.type === 'checkbox') input.checked = data.config[key];
       else {
-        input.value = data.config[key];
+        input.value = data.config[key] ?? FIELD_DEFAULTS[key];
         if (data.bounds?.[key]) { input.min = data.bounds[key].min; input.max = data.bounds[key].max; }
       }
     }

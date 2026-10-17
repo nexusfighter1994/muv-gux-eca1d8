@@ -8,6 +8,8 @@
 const { AsyncLocalStorage } = require('node:async_hooks');
 
 const bypass = new AsyncLocalStorage();
+// Upper bound of parallel Home renders (the Home graphics gate has this many slots).
+const MAX_SLOTS = 4;
 const MAIN = /<[a-zA-Z][^>]*\bdata-composition-id\s*=\s*(["'])main\1[^>]*>/g;
 const ALPHA_HEADER = /^<!doctype html>\s*<html>\s*<head>\s*<meta charset="utf-8">\s*<style>[^<]*<\/style>\s*<\/head>\s*<body>\s*<div id="root" data-composition-id="main" data-start="0" data-duration="([0-9]+(?:\.[0-9]+)?)" data-width="1920" data-height="1080">/;
 
@@ -60,11 +62,14 @@ function leaseSignal(signals, valid, pollMs = 2000) {
 }
 
 function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted, getConfig, loadOpaque, loadAlpha,
-  opaqueUrl, alphaUrl, reserveRatio = 0.3, healthTimeoutMs = 5000, maxSamples = 12, maxRemote = 2 }) {
+  opaqueUrl, alphaUrl, reserveRatio = 0.3, healthTimeoutMs = 5000, maxSamples = 12, maxRemote = 2, bypass: sharedBypass }) {
+  // A route rebuilt in a running server must keep the bypass scope of the routes it replaces.
+  const scope = sharedBypass || bypass;
+  if (typeof scope?.run !== 'function' || typeof scope?.getStore !== 'function') throw new TypeError('bypass must be an AsyncLocalStorage');
   // Persisted install runs before the native scheduler initialises: accept a getter.
   if (!jp && typeof getJobs === 'function') jp = { get: id => getJobs()?.get?.(id) };
-  // Home has ONE graphics slot: extra concurrent offers would upload, get "busy" and
-  // briefly inflate the +1 capacity. They go straight to the server instead.
+  // At most motionSlots offers are in flight: extra concurrent offers would upload, get
+  // "busy" and briefly inflate the +1 capacity. They go straight to the server instead.
   // Last Home exchanges (path, status, Home error text, duration) for diagnosis.
   const homeLog = [];
   const logHome = entry => { homeLog.push({ at: new Date().toISOString(), ...entry }); if (homeLog.length > 30) homeLog.shift(); };
@@ -86,7 +91,15 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
     }
   };
   let inflight = 0;
-  const takeSlot = () => (inflight < maxRemote ? (inflight++, true) : false);
+  // Live PC Boost settings (motionSlots / motionHomeShare); invalid values keep the fixed defaults.
+  const slotsFor = s => (Number.isSafeInteger(s?.motionSlots) && s.motionSlots >= 1 && s.motionSlots <= MAX_SLOTS ? s.motionSlots : maxRemote);
+  const ratioFor = s => (Number.isSafeInteger(s?.motionHomeShare) && s.motionHomeShare >= 50 && s.motionHomeShare <= 90
+    ? (100 - s.motionHomeShare) / 100 : reserveRatio);
+  const takeSlot = settings => {
+    const limit = slotsFor(settings);
+    stats.limits = { slots: limit, reserveRatio: ratioFor(settings) };
+    return inflight < limit ? (inflight++, true) : false;
+  };
   const giveSlot = () => { inflight = Math.max(0, inflight - 1); };
   if (!loadOpaque && typeof opaqueUrl === 'string') loadOpaque = () => import(opaqueUrl);
   if (!loadAlpha && typeof alphaUrl === 'string') loadAlpha = () => import(alphaUrl);
@@ -133,7 +146,8 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
   }
   function precheck(ctx, options) {
     const c = getConfig();
-    if (!c || c.getSettings?.()?.homeMotion !== true) return reject('home_disabled', options);
+    ctx.settings = c?.getSettings?.();
+    if (!c || ctx.settings?.homeMotion !== true) return reject('home_disabled', options);
     if (!ctx.jobId) return reject('no_scope', options);
     if (ctx.licensed !== ctx.jobId) return reject('license_mismatch', options);
     if (ctx.lease?.resourceKey !== 'frameshift') return reject('no_frameshift_lease', options);
@@ -146,8 +160,8 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
     if (original.__vfFrameshiftRoute) return original;
     const routed = async function render(options) {
       stats.calls++;
-      const self = this, native = o => bypass.run(true, () => Reflect.apply(original, self, [o]));
-      if (bypass.getStore()) { stats.bypassed++; return Reflect.apply(original, this, [options]); }
+      const self = this, native = o => scope.run(true, () => Reflect.apply(original, self, [o]));
+      if (scope.getStore()) { stats.bypassed++; return Reflect.apply(original, this, [options]); }
       const format = options?.format;
       const kind = format === 'mov' ? 'alpha' : (format === undefined || format === 'mp4') ? 'opaque' : null;
       if (!kind) { reject('format_' + format, options); return native(options); }
@@ -163,14 +177,14 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
       let validNow = false;
       try { validNow = valid(); } catch { validNow = false; }
       if (!validNow) { reject('invalid_' + whyInvalid(ctx), options); return native(options); }
-      if (!takeSlot()) { reject('home_busy', null); return native(options); }
+      if (!takeSlot(ctx.settings)) { reject('home_busy', null); return native(options); }
       const watch = leaseSignal([ctx.lease?.signal, ctx.outerSignal, options?.signal], valid), signal = watch.signal;
       if (watch.watchdog) stats.watchdog = (stats.watchdog || 0) + 1;
       const bucket = stats[kind];
       bucket.tried++; stats.active++;
       let usedNative = false;
       const fallback = o => { usedNative = true; giveSlot(); return native(o); };
-      const shared = { ...c, fetchImpl: c.fetchImpl ?? tracedFetch, token: c.getToken(), permitted: valid, nativeReserveRatio: reserveRatio, healthTimeoutMs, freshNativeBudget: true };
+      const shared = { ...c, fetchImpl: c.fetchImpl ?? tracedFetch, token: c.getToken(), permitted: valid, nativeReserveRatio: ratioFor(ctx.settings), healthTimeoutMs, freshNativeBudget: true };
       try {
         let result;
         if (kind === 'alpha') {
@@ -240,8 +254,8 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
     if (typeof original !== 'function') throw new TypeError('original must be a function');
     if (original.__vfFrameshiftRoute) return original;
     const wrapped = async function runRender(args) {
-      const self = this, passthrough = () => bypass.run(true, () => Reflect.apply(original, self, [args]));
-      if (bypass.getStore()) return Reflect.apply(original, this, [args]);
+      const self = this, passthrough = () => scope.run(true, () => Reflect.apply(original, self, [args]));
+      if (scope.getStore()) return Reflect.apply(original, this, [args]);
       stats.low.calls++;
       const rec = compositions.get(args?.projectDir);
       if (args?.projectDir) compositions.delete(args.projectDir);
@@ -263,14 +277,14 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
       let validNow = false, why = null;
       try { validNow = valid(); } catch { why = 'low_scope_aborted'; }
       if (!validNow) { reject(why || 'low_invalid_' + whyInvalid(ctx), null); return passthrough(); }
-      if (!takeSlot()) { reject('low_home_busy', null); return passthrough(); }
+      if (!takeSlot(ctx.settings)) { reject('low_home_busy', null); return passthrough(); }
       const watch = leaseSignal([ctx.lease?.signal, ctx.outerSignal, args.signal], valid), signal = watch.signal;
       if (watch.watchdog) stats.watchdog = (stats.watchdog || 0) + 1;
       stats.low.tried++; stats.active++;
       let usedNative = false, nativeResult;
       // Release the Home slot before the (long) server render so the next offer can use Home.
       const fallback = async () => { usedNative = true; giveSlot(); nativeResult = await passthrough(); return nativeResult; };
-      const shared = { ...c, fetchImpl: c.fetchImpl ?? tracedFetch, token: c.getToken(), permitted: valid, nativeReserveRatio: reserveRatio, healthTimeoutMs, freshNativeBudget: true };
+      const shared = { ...c, fetchImpl: c.fetchImpl ?? tracedFetch, token: c.getToken(), permitted: valid, nativeReserveRatio: ratioFor(ctx.settings), healthTimeoutMs, freshNativeBudget: true };
       try {
         if (kind === 'alpha') {
           const { createAlphaHook } = await loadAlpha();
@@ -298,7 +312,7 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
     if (!entry || entry.original !== original) memo.set(name, entry = { original, wrapped: wrappers[name](original) });
     return Reflect.apply(entry.wrapped, self, args);
   }
-  return { wrap, wrapMaterialize, wrapRunRender, call, stats, bypass, compositions, homeLog };
+  return { wrap, wrapMaterialize, wrapRunRender, call, stats, bypass: scope, compositions, homeLog };
 }
 
 module.exports = { createFrameshiftRoute, opaqueDuration, alphaDuration, bypass };
