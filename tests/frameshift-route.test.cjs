@@ -176,15 +176,15 @@ function liveRoute(settings, extra = {}) {
   const als = new AsyncLocalStorage();
   const lease = { resourceKey: 'frameshift', released: false, parked: false, signal: new AbortController().signal };
   const scope = { jobId: 'job', lanes: new Set(['render']), leases: new Map([['render', lease]]) };
-  const gates = [], ratios = [];
+  const gates = [], ratios = [], shares = [];
   let native = 0;
-  const hook = (fallback, cfg) => async () => { ratios.push(cfg.nativeReserveRatio); await new Promise(r => gates.push(r)); return { home: true }; };
+  const hook = (fallback, cfg) => async () => { ratios.push(cfg.nativeReserveRatio); shares.push(cfg.homeShare); await new Promise(r => gates.push(r)); return { home: true }; };
   const route = createFrameshiftRoute({ RU: () => 'job', getStore: () => als.getStore(), mF: () => 'render', jp: new Map(), Xl: () => null,
     isJobAborted: () => false, getConfig: () => ({ getSettings: () => ({ homeMotion: true, ...settings }), getToken: () => 't', contract: 'c' }),
     loadAlpha: async () => ({ createAlphaHook: hook }), loadOpaque: async () => ({ createMotionHook: hook }), ...extra });
   const render = route.wrap(async () => { native++; return { native: true }; });
   const run = () => als.run(scope, () => render({ ...base, compositionHtml: OPAQUE, workers: 3 }));
-  return { route, run, gates, ratios, nativeCount: () => native };
+  return { route, run, gates, ratios, shares, nativeCount: () => native };
 }
 const tick = () => new Promise(r => setImmediate(r));
 
@@ -198,7 +198,7 @@ test('motionSlots from the live PC Boost settings bounds parallel Home offers (c
   const fourth = r.run();
   await tick();
   assert.equal(r.gates.length, 4);
-  assert.deepEqual(r.route.stats.limits, { slots: 4, reserveRatio: 0.3 });
+  assert.deepEqual(r.route.stats.limits, { slots: 4, reserveRatio: 0.3, homeShare: null });
   r.gates.forEach(release => release());
   for (const p of [...running, fourth]) assert.deepEqual(await p, { home: true });
   assert.equal(r.nativeCount(), 1);
@@ -233,4 +233,71 @@ test('a rebuilt route can share the running bypass scope; a bad bypass is reject
   assert.deepEqual(await first.route.bypass.run(true, () => second.run()), { native: true }, 'fallback of the old route is not re-offered');
   assert.equal(second.gates.length, 0);
   assert.throws(() => liveRoute({}, { bypass: {} }), /bypass must be an AsyncLocalStorage/);
+});
+
+test('motionHomeShare 50..200 is passed to the hooks as homeShare (above 1 = longer than the server deadline)', async () => {
+  for (const [share, expected] of [[150, 1.5], [200, 2], [70, 0.7], [201, null], [49, null], [undefined, null]]) {
+    const r = liveRoute({ motionHomeShare: share });
+    const p = r.run();
+    await tick();
+    assert.equal(r.shares[0], expected, `share ${share}`);
+    r.gates.forEach(release => release());
+    await p;
+  }
+});
+
+function probeRoute(settings = {}) {
+  let offerable = null;
+  const r = liveRoute(settings, { setOfferable: fn => { offerable = fn; } });
+  return { ...r, offerable: () => offerable() };
+}
+
+test('probe offerable: Home verified ready, slots free, no cool-down', async () => {
+  const saved = globalThis.__vfHomeCapabilities;
+  try {
+    globalThis.__vfHomeCapabilities = { ready: true, checkedAt: Date.now() };
+    const r = probeRoute({ motionSlots: 2 });
+    assert.equal(r.offerable(), true);
+    const a = r.run(), b = r.run();
+    await tick();
+    assert.equal(r.offerable(), false, 'all slots in flight');
+    r.gates.forEach(release => release());
+    await Promise.all([a, b]);
+    assert.equal(r.offerable(), true);
+    globalThis.__vfHomeCapabilities = { ready: false, checkedAt: Date.now() };
+    assert.equal(r.offerable(), false, 'PC not verified ready');
+    globalThis.__vfHomeCapabilities = { ready: true, checkedAt: Date.now() - 60000 };
+    assert.equal(r.offerable(), false, 'stale readiness');
+    globalThis.__vfHomeCapabilities = { ready: true, checkedAt: Date.now() };
+    assert.equal(probeRoute({ homeMotion: false }).offerable(), false, 'Home motion off');
+  } finally { globalThis.__vfHomeCapabilities = saved; }
+});
+
+test('probe cools down after 3 offers in a row ended on the server; busy/scope refusals never count', async () => {
+  const saved = globalThis.__vfHomeCapabilities;
+  try {
+    globalThis.__vfHomeCapabilities = { ready: true, checkedAt: Date.now() };
+    const als = new AsyncLocalStorage();
+    const lease = { resourceKey: 'frameshift', released: false, parked: false, signal: new AbortController().signal };
+    const scope = { jobId: 'job', lanes: new Set(['render']), leases: new Map([['render', lease]]) };
+    let offerable = null, fail = true;
+    const hook = fallback => async options => (fail ? fallback(options) : { home: true });
+    const route = createFrameshiftRoute({ RU: () => 'job', getStore: () => als.getStore(), mF: () => 'render', jp: new Map(), Xl: () => null,
+      isJobAborted: () => false, getConfig: () => ({ getSettings: () => ({ homeMotion: true }), getToken: () => 't', contract: 'c' }),
+      setOfferable: fn => { offerable = fn; }, loadAlpha: async () => ({ createAlphaHook: hook }), loadOpaque: async () => ({ createMotionHook: hook }) });
+    const render = route.wrap(async () => ({ native: true }));
+    const run = () => als.run(scope, () => render({ ...base, compositionHtml: OPAQUE, workers: 3 }));
+    await render({ ...base, compositionHtml: OPAQUE, workers: 3 });
+    await render({ ...base, compositionHtml: OPAQUE, workers: 3 });
+    await render({ ...base, compositionHtml: OPAQUE, workers: 3 });
+    assert.equal(offerable(), true, 'out-of-scope renders (no_scope) never cool the probe');
+    await run(); await run();
+    assert.equal(offerable(), true, 'two Home failures keep the probe');
+    fail = false; await run(); fail = true;
+    await run(); await run();
+    assert.equal(offerable(), true, 'a Home success resets the count');
+    await run();
+    assert.equal(offerable(), false, 'third Home failure in a row starts the cool-down');
+    assert.equal(route.stats.probeCooldowns, 1);
+  } finally { globalThis.__vfHomeCapabilities = saved; }
 });

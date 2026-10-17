@@ -470,3 +470,32 @@ test('unsafe endpoint is rejected without HTTP or renderer startup', async () =>
     assert.throws(() => createAlphaHook(() => {}, {endpoint, contract}), /private tunnel/);
   }
 });
+
+test('homeShare gives Home that share of the deadline, also beyond it, capped at Home 600 s', async () => temporary(async root => {
+  for (const [share, timeoutMs, expected] of [[1.5, 300000, 450000], [0.7, 300000, 210000], [2, 300000, 600000], [2, 400000, 600000], [0.95, 300000, 285000]]) {
+    const h = await harness(root, {config: {freshNativeBudget: true, homeShare: share, nativeReserveRatio: 0.3}});
+    await h.hook({...h.options, timeoutMs}, {kind, duration: 0.125});
+    const sent = h.posted[0].timeoutMs;
+    assert.ok(sent <= expected && sent > expected - 2000, `share ${share} of ${timeoutMs}: Home got ${sent}, expected ~${expected}`);
+    await fs.rm(path.join(root, 'final.mov'), {force: true});
+  }
+}));
+
+test('invalid homeShare, or no fresh native budget, keeps the reserve-based deadline', async () => temporary(async root => {
+  for (const config of [{freshNativeBudget: true, homeShare: 2.5, nativeReserveRatio: 0.3}, {freshNativeBudget: true, homeShare: 0.4, nativeReserveRatio: 0.3},
+    {freshNativeBudget: false, homeShare: 1.5, nativeReserveRatio: 0.3}, {freshNativeBudget: true, homeShare: '1.5', nativeReserveRatio: 0.3}]) {
+    const h = await harness(root, {config});
+    await h.hook(h.options, {kind, duration: 0.125});
+    const sent = h.posted[0].timeoutMs;
+    assert.ok(sent <= 210000 && sent > 208000, `${JSON.stringify(config)} -> ${sent}`);
+    await fs.rm(path.join(root, 'final.mov'), {force: true});
+  }
+}));
+
+test('a Home failure after a long share still gives the native fallback its full deadline', async () => temporary(async root => {
+  const h = await harness(root, {config: {freshNativeBudget: true, homeShare: 1.5}, fetch: async (_url, init) =>
+    (init.method ?? 'GET') === 'GET' ? Response.json({version: 1, contract, slots: 4, kinds: [kind]})
+      : (init.method === 'DELETE' ? Response.json({terminated: true}) : new Response('{"error":"unavailable"}', {status: 503}))});
+  assert.equal(await h.hook(h.options, {kind, duration: 0.125}), 'native');
+  assert.equal(h.nativeOptions[0].timeoutMs, 300000);
+}));

@@ -58,10 +58,10 @@ class PcBoostSettings extends HTMLElement {
               </div>
               <div class="vf-pc-boost__boost">
                 <h3 class="vf-pc-boost__subtitle">Home PC motion graphics</h3>
-                <p class="vc-muted vf-pc-boost__hint">Parallel motion graphics the server offers to the home PC, and how much of a graphic's render deadline the PC may use. When the PC takes longer, the server renders that graphic itself with its full deadline. Applies to the next graphic, no restart.</p>
+                <p class="vc-muted vf-pc-boost__hint">Parallel motion graphics the server offers to the home PC, and how much of a graphic's render deadline the PC may use (above 100 % the PC may take longer than the server would; at most 10 minutes per graphic). When the PC takes longer, the server renders that graphic itself with its full deadline. Applies to the next graphic, no restart.</p>
                 <div class="vf-pc-boost__limits">
                   <label>Parallel motion graphics<input class="vc-input" name="motionSlots" type="number" min="1" max="4" step="1" required></label>
-                  <label>Home PC time share (%)<input class="vc-input" name="motionHomeShare" type="number" min="50" max="90" step="5" required></label>
+                  <label>Home PC time share (%)<input class="vc-input" name="motionHomeShare" type="number" min="50" max="200" step="5" required></label>
                 </div>
               </div>
             </fieldset>

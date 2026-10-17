@@ -89,7 +89,7 @@ process.env.VIDFORGE_PROGRESS_SNAPSHOT_MIN_MS ??= '2000';
 // One Home-GPU route for every Frameshift render (alpha overlays + opaque motion), switch homeMotion.
 export function installFrameshiftRoute(native) {
   if (!modEnabled('homeMotion') || globalThis.__vfFrameshiftRoute) return globalThis.__vfFrameshiftRoute || null;
-  const route = frameshiftRoute.createFrameshiftRoute({ ...native, getConfig: getMotionConfiguration,
+  const route = frameshiftRoute.createFrameshiftRoute({ ...native, getConfig: getMotionConfiguration, setOfferable: homeRemote.setOfferable,
     loadOpaque: () => import('./home-graphics/motion-offload/hook.mjs'),
     loadAlpha: () => import('./home-graphics/motion-offload/alpha-hook.mjs') });
   return (globalThis.__vfFrameshiftRoute = route);

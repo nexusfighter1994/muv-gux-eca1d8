@@ -27,7 +27,8 @@ export const CONFIG_BOUNDS = Object.freeze({
   clipvaultBoost: Object.freeze({ min: 0, max: 200 }),
   ffmpegBoost: Object.freeze({ min: 0, max: 64 }),
   motionSlots: Object.freeze({ min: 1, max: 4 }),
-  motionHomeShare: Object.freeze({ min: 50, max: 90 }),
+  // Above 100 Home may take longer than the server's own render deadline (Home caps at 10 min).
+  motionHomeShare: Object.freeze({ min: 50, max: 200 }),
 });
 const RUNTIME_PATH = '/data/runtime/pc-boost.json';
 const TOKEN_PATH = '/data/runtime/pc-boost-token';

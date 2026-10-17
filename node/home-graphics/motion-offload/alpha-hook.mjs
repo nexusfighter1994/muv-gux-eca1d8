@@ -51,9 +51,12 @@ async function readJson(response, maximum, signal) {
   }
 }
 
+// Home rejects deadlines above 10 min; a share beyond the deadline still leaves time to receive.
+export const HOME_LIMIT_MS = 600000, RECEIVE_MIN_MS = 120000, HOME_SHARE_MIN = 0.5, HOME_SHARE_MAX = 2;
+
 export function createAlphaHook(nativeRender, {endpoint, token, contract, permitted, ffprobe, ffmpeg,
   timeoutMs = 600000, fetchImpl = fetch, requiredBackend = 'd3d11/nvidia',
-  nativeReserveMs = 0, nativeReserveRatio = 0, healthTimeoutMs = null, freshNativeBudget = false}) {
+  nativeReserveMs = 0, nativeReserveRatio = 0, healthTimeoutMs = null, freshNativeBudget = false, homeShare = null}) {
   const base = new URL(endpoint);
   if (base.protocol !== 'http:' || base.username || base.password || base.pathname !== '/' || base.search || base.hash
     || !(['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname)
@@ -80,8 +83,13 @@ export function createAlphaHook(nativeRender, {endpoint, token, contract, permit
     const ratioReserve = Number.isFinite(nativeReserveRatio) && nativeReserveRatio > 0 && nativeReserveRatio < 1
       ? Math.min(Math.max(0, budget - 1), Math.ceil(budget * nativeReserveRatio)) : 0;
     const reserve = Math.max(fixedReserve, ratioReserve);
+    // homeShare (PC Boost motionHomeShare): Home may use this share of the deadline, also
+    // beyond it (capped at Home's own limit); the native fallback keeps its full deadline.
+    const shareMode = freshNativeBudget && Number.isFinite(homeShare) && homeShare >= HOME_SHARE_MIN && homeShare <= HOME_SHARE_MAX;
+    const homeMs = shareMode ? Math.min(HOME_LIMIT_MS, Math.ceil(budget * homeShare)) : budget - reserve;
+    const homeDeadline = Date.now() + homeMs;
     const controller = new AbortController();
-    let timer = setTimeout(() => controller.abort(Error('alpha motion timeout')), budget - reserve);
+    let timer = setTimeout(() => controller.abort(Error('alpha motion timeout')), homeMs);
     const abort = () => controller.abort(signal.reason);
     signal?.addEventListener('abort', abort, {once: true});
     if (signal?.aborted) abort();
@@ -109,7 +117,7 @@ export function createAlphaHook(nativeRender, {endpoint, token, contract, permit
         || !Array.isArray(health.kinds) || !health.kinds.includes(KIND)) throw Error('alpha health contract');
       await active();
       controller.signal.throwIfAborted();
-      const remaining = Math.floor(deadline - Date.now() - reserve);
+      const remaining = Math.floor(homeDeadline - Date.now());
       if (remaining < 1) throw Error('remote deadline exhausted');
       const p = validate({version: 1, id, contract, kind: KIND, format: options.format,
         compositionHtml: options.compositionHtml, renderOnlyHtml: options.renderOnlyHtml ?? '', assets,
@@ -125,7 +133,8 @@ export function createAlphaHook(nativeRender, {endpoint, token, contract, permit
       // fallback keeps its own fresh budget, so this never shortens a server render.
       if (response.ok && freshNativeBudget) {
         clearTimeout(timer);
-        timer = setTimeout(() => controller.abort(Error('alpha receive timeout')), Math.max(1, deadline - Date.now()));
+        timer = setTimeout(() => controller.abort(Error('alpha receive timeout')),
+          Math.max(shareMode ? RECEIVE_MIN_MS : 1, deadline - Date.now()));
       }
       const result = await readJson(response, MAX_RESPONSE, controller.signal);
       const bytes = decodeBase64(result.data, MAX_OUTPUT);

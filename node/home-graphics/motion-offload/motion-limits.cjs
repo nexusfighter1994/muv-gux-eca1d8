@@ -3,7 +3,7 @@
 // motionHomeShare). Invalid or missing values fall back to the previous fixed behaviour.
 const LIMITS = Object.freeze({
   motionSlots: Object.freeze({ min: 1, max: 4, fallback: 2 }),
-  motionHomeShare: Object.freeze({ min: 50, max: 90, fallback: 70 }),
+  motionHomeShare: Object.freeze({ min: 50, max: 200, fallback: 70 }),
 });
 
 function motionLimits(config) {

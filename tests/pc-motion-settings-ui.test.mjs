@@ -23,7 +23,7 @@ test('Home motion slots and time share are editable PC Boost settings with bound
     assert.equal(slots.value, '3');
     assert.equal(share.value, '85');
     assert.equal([slots.min, slots.max].join(), '1,4');
-    assert.equal([share.min, share.max].join(), '50,90');
+    assert.equal([share.min, share.max].join(), '50,200');
     assert.match(settings.textContent, /Parallel motion graphics/);
     assert.match(settings.textContent, /Home PC time share/);
   } finally {dom.window.close();}

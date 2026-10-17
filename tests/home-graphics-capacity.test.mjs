@@ -205,3 +205,61 @@ test('hot bridge: shared provider adopted once; renders already waiting use Home
   assert.equal(nativeCalls, 4);
   assert.equal(seen.payloads.length, 3);
 });
+
+test('probe: while the route reports Home can take one more, ONE extra frameshift render is admitted (cap 4)', () => {
+  const lane = wrapRenderLane(name => ({render: 5, ffmpeg: 14})[name]);
+  const cap = wrapFrameshiftCap((e, t, r) => (e === 'render' && r === 'frameshift' ? Math.min(t, 2) : t), () => 2);
+  let offer = true;
+  remote.setOfferable(() => offer);
+  try {
+    assert.equal(cap('render', lane('render'), 'frameshift'), 3, 'one probe slot beyond the native limit');
+    assert.equal(cap('render', lane('render'), 'remotion'), 6, 'only frameshift gets the probe; the lane grows with it');
+    const ends = [remote.begin('frameshift'), remote.begin('frameshift'), remote.begin('frameshift')];
+    assert.equal(cap('render', lane('render'), 'frameshift'), 6, '3 remote + probe');
+    ends.push(remote.begin('frameshift'));
+    assert.equal(cap('render', lane('render'), 'frameshift'), 6, 'extra capacity never exceeds 4');
+    offer = false;
+    assert.equal(cap('render', lane('render'), 'frameshift'), 6);
+    ends.forEach(end => end());
+    assert.equal(cap('render', lane('render'), 'frameshift'), 2, 'no probe while Home cannot take one');
+    remote.setOfferable(() => { throw Error('closed'); });
+    assert.equal(cap('render', lane('render'), 'frameshift'), 2, 'a failing probe check admits nothing extra');
+  } finally { remote.setOfferable(null); }
+  assert.equal(cap('render', lane('render'), 'frameshift'), 2);
+});
+
+test('remote renders lower one frameshift RAM allocation each (newest first) and restore it on end', () => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, '__vfRamAllocations');
+  const table = new Map([
+    [1, {laneKey: 'render', resourceKey: 'frameshift', estimateMb: 3852, grantedAtMs: 100}],
+    [2, {laneKey: 'render', resourceKey: 'frameshift', estimateMb: 3852, grantedAtMs: 300}],
+    [3, {laneKey: 'ffmpeg', resourceKey: 'ffmpeg', estimateMb: 1191, grantedAtMs: 400}],
+    [4, {laneKey: 'render', resourceKey: 'remotion', estimateMb: 2000, grantedAtMs: 500}]]);
+  Object.defineProperty(globalThis, '__vfRamAllocations', {configurable: true, get: () => table});
+  try {
+    const sum = () => [...table.values()].reduce((n, e) => n + e.estimateMb, 0);
+    const before = sum();
+    const first = remote.begin('frameshift');
+    assert.equal(table.get(2).estimateMb, remote.REMOTE_MB, 'newest frameshift allocation lowered');
+    assert.equal(table.get(1).estimateMb, 3852);
+    const second = remote.begin('frameshift');
+    assert.equal(table.get(1).estimateMb, remote.REMOTE_MB);
+    const third = remote.begin('frameshift');
+    assert.equal(sum(), before - 2 * (3852 - remote.REMOTE_MB), 'no third frameshift entry to lower; ffmpeg/remotion untouched');
+    assert.equal(remote.snapshot().loweredMb, 2 * (3852 - remote.REMOTE_MB));
+    first(); first();
+    assert.equal(table.get(2).estimateMb, 3852, 'restored once on end (idempotent)');
+    table.delete(1);
+    second();
+    third();
+    assert.equal(sum(), before - 3852, 'a lease that finished first is simply gone');
+    assert.equal(remote.snapshot().loweredMb, 0);
+    const other = remote.begin('map');
+    assert.equal(table.get(2).estimateMb, 3852, 'other resources never touch frameshift RAM');
+    other();
+  } finally {
+    if (saved) Object.defineProperty(globalThis, '__vfRamAllocations', saved); else delete globalThis.__vfRamAllocations;
+  }
+  const end = remote.begin('frameshift');
+  end();
+});

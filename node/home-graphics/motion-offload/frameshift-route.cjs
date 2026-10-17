@@ -10,6 +10,10 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const bypass = new AsyncLocalStorage();
 // Upper bound of parallel Home renders (the Home graphics gate has this many slots).
 const MAX_SLOTS = 4;
+// Probe admission cool-down: this many offers in a row ending on the server pause the probe.
+const PROBE_MISSES = 3, PROBE_COOLDOWN_MS = 60000;
+// Only Home failures and ineligible offers count; busy/disabled/scope refusals say nothing about Home.
+const NO_MISS = new Set(['home_busy', 'low_home_busy', 'home_disabled', 'no_scope', 'license_mismatch', 'no_frameshift_lease', 'lease_inactive']);
 const MAIN = /<[a-zA-Z][^>]*\bdata-composition-id\s*=\s*(["'])main\1[^>]*>/g;
 const ALPHA_HEADER = /^<!doctype html>\s*<html>\s*<head>\s*<meta charset="utf-8">\s*<style>[^<]*<\/style>\s*<\/head>\s*<body>\s*<div id="root" data-composition-id="main" data-start="0" data-duration="([0-9]+(?:\.[0-9]+)?)" data-width="1920" data-height="1080">/;
 
@@ -62,7 +66,7 @@ function leaseSignal(signals, valid, pollMs = 2000) {
 }
 
 function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted, getConfig, loadOpaque, loadAlpha,
-  opaqueUrl, alphaUrl, reserveRatio = 0.3, healthTimeoutMs = 5000, maxSamples = 12, maxRemote = 2, bypass: sharedBypass }) {
+  opaqueUrl, alphaUrl, reserveRatio = 0.3, healthTimeoutMs = 5000, maxSamples = 12, maxRemote = 2, bypass: sharedBypass, setOfferable }) {
   // A route rebuilt in a running server must keep the bypass scope of the routes it replaces.
   const scope = sharedBypass || bypass;
   if (typeof scope?.run !== 'function' || typeof scope?.getStore !== 'function') throw new TypeError('bypass must be an AsyncLocalStorage');
@@ -95,12 +99,44 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
   const slotsFor = s => (Number.isSafeInteger(s?.motionSlots) && s.motionSlots >= 1 && s.motionSlots <= MAX_SLOTS ? s.motionSlots : maxRemote);
   const ratioFor = s => (Number.isSafeInteger(s?.motionHomeShare) && s.motionHomeShare >= 50 && s.motionHomeShare <= 90
     ? (100 - s.motionHomeShare) / 100 : reserveRatio);
+  // Home share of the deadline for the hooks (0.5..2, above 1 = longer than the server deadline).
+  const shareFor = s => (Number.isSafeInteger(s?.motionHomeShare) && s.motionHomeShare >= 50 && s.motionHomeShare <= 200
+    ? s.motionHomeShare / 100 : null);
   const takeSlot = settings => {
     const limit = slotsFor(settings);
-    stats.limits = { slots: limit, reserveRatio: ratioFor(settings) };
+    stats.limits = { slots: limit, reserveRatio: ratioFor(settings), homeShare: shareFor(settings) };
     return inflight < limit ? (inflight++, true) : false;
   };
-  const giveSlot = () => { inflight = Math.max(0, inflight - 1); };
+  const giveSlot = () => {
+    inflight = Math.max(0, inflight - 1);
+    // A free Home slot may re-open the probe admission: let the scheduler look again.
+    try { globalThis.__vfPcBoostWake?.(); } catch { /* best effort */ }
+  };
+  // Probe admission: while Home could take one more render, the scheduler admits ONE extra
+  // frameshift render (remote-active) that is offered here. Off while the PC is not verified
+  // ready, all slots are taken, or recent offers kept ending on the server (cool-down).
+  let misses = 0, coolUntil = 0, cached = { at: 0, settings: null };
+  const liveSettings = () => {
+    const now = Date.now();
+    if (now - cached.at > 2000) {
+      let settings = null;
+      try { settings = getConfig()?.getSettings?.() ?? null; } catch { /* configuration closed */ }
+      cached = { at: now, settings };
+    }
+    return cached.settings;
+  };
+  const offerable = () => {
+    const settings = liveSettings(), caps = globalThis.__vfHomeCapabilities, now = Date.now();
+    return settings?.homeMotion === true && caps?.ready === true && now - caps.checkedAt < 20000
+      && now >= coolUntil && inflight < slotsFor(settings);
+  };
+  const hit = () => { misses = 0; };
+  const miss = () => {
+    if (++misses < PROBE_MISSES) return;
+    misses = 0;
+    coolUntil = Date.now() + PROBE_COOLDOWN_MS;
+    stats.probeCooldowns = (stats.probeCooldowns || 0) + 1;
+  };
   if (!loadOpaque && typeof opaqueUrl === 'string') loadOpaque = () => import(opaqueUrl);
   if (!loadAlpha && typeof alphaUrl === 'string') loadAlpha = () => import(alphaUrl);
   for (const [name, fn] of Object.entries({ RU, getStore, mF, Xl, isJobAborted, getConfig, loadOpaque, loadAlpha })) {
@@ -111,6 +147,7 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
     errors: 0, active: 0, reasons: {}, samples: [], last: null };
   const reject = (reason, options) => {
     stats.reasons[reason] = (stats.reasons[reason] || 0) + 1;
+    if (!NO_MISS.has(reason)) miss();
     if (stats.samples.length < maxSamples) {
       stats.samples.push({ reason, at: new Date().toISOString(), format: options?.format ?? null, workers: options?.workers ?? null,
         keys: options ? Object.keys(options).sort() : null, assetKeys: [...new Set((options?.assets || []).flatMap(a => Object.keys(a || {})))] });
@@ -183,8 +220,8 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
       const bucket = stats[kind];
       bucket.tried++; stats.active++;
       let usedNative = false;
-      const fallback = o => { usedNative = true; giveSlot(); return native(o); };
-      const shared = { ...c, fetchImpl: c.fetchImpl ?? tracedFetch, token: c.getToken(), permitted: valid, nativeReserveRatio: ratioFor(ctx.settings), healthTimeoutMs, freshNativeBudget: true };
+      const fallback = o => { usedNative = true; miss(); giveSlot(); return native(o); };
+      const shared = { ...c, fetchImpl: c.fetchImpl ?? tracedFetch, token: c.getToken(), permitted: valid, nativeReserveRatio: ratioFor(ctx.settings), homeShare: shareFor(ctx.settings), healthTimeoutMs, freshNativeBudget: true };
       try {
         let result;
         if (kind === 'alpha') {
@@ -195,7 +232,7 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
           result = await createMotionHook(fallback, shared)(options, { signal, duration });
         }
         if (usedNative) bucket.native++;
-        else { bucket.home++; stats.last = { kind, jobId: ctx.jobId, at: new Date().toISOString(), path: options.targetPath }; }
+        else { hit(); bucket.home++; stats.last = { kind, jobId: ctx.jobId, at: new Date().toISOString(), path: options.targetPath }; }
         return result;
       } catch (error) { stats.errors++; throw error; }
       finally { watch.stop(); if (!usedNative) giveSlot(); stats.active--; }
@@ -283,8 +320,8 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
       stats.low.tried++; stats.active++;
       let usedNative = false, nativeResult;
       // Release the Home slot before the (long) server render so the next offer can use Home.
-      const fallback = async () => { usedNative = true; giveSlot(); nativeResult = await passthrough(); return nativeResult; };
-      const shared = { ...c, fetchImpl: c.fetchImpl ?? tracedFetch, token: c.getToken(), permitted: valid, nativeReserveRatio: ratioFor(ctx.settings), healthTimeoutMs, freshNativeBudget: true };
+      const fallback = async () => { usedNative = true; miss(); giveSlot(); nativeResult = await passthrough(); return nativeResult; };
+      const shared = { ...c, fetchImpl: c.fetchImpl ?? tracedFetch, token: c.getToken(), permitted: valid, nativeReserveRatio: ratioFor(ctx.settings), homeShare: shareFor(ctx.settings), healthTimeoutMs, freshNativeBudget: true };
       try {
         if (kind === 'alpha') {
           const { createAlphaHook } = await loadAlpha();
@@ -294,6 +331,7 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
           await createMotionHook(fallback, shared)(options, { signal, duration });
         }
         if (usedNative) { stats.low.native++; return nativeResult; }
+        hit();
         stats.low.home++;
         stats.last = { kind: 'low-' + kind, jobId: ctx.jobId, at: new Date().toISOString(), path: args.outputPath };
         return { code: 0, timedOut: false, stdout: '', stderr: '' };
@@ -312,7 +350,8 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
     if (!entry || entry.original !== original) memo.set(name, entry = { original, wrapped: wrappers[name](original) });
     return Reflect.apply(entry.wrapped, self, args);
   }
-  return { wrap, wrapMaterialize, wrapRunRender, call, stats, bypass: scope, compositions, homeLog };
+  if (typeof setOfferable === 'function') setOfferable(offerable);
+  return { wrap, wrapMaterialize, wrapRunRender, call, stats, bypass: scope, compositions, homeLog, offerable };
 }
 
 module.exports = { createFrameshiftRoute, opaqueDuration, alphaDuration, bypass };

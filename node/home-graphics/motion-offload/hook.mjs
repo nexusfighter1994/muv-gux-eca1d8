@@ -3,6 +3,8 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import {verify,MAX} from './worker.mjs';
 import remoteActive from '../remote-active.cjs';
+// Same limits as alpha-hook.mjs: Home rejects deadlines above 10 min; a share beyond the deadline still leaves time to receive.
+const HOME_LIMIT_MS=600000,RECEIVE_MIN_MS=120000,HOME_SHARE_MIN=0.5,HOME_SHARE_MAX=2;
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 // An unconfirmed remote cancel (Home lost mid-render) pauses Home offers, but only for a while:
 // Home's single graphics slot rejects new work while an abandoned job could still run.
@@ -10,7 +12,7 @@ export const QUARANTINE_MS=5*60*1000;
 const uncertainHome={until:new Map(),
   has(key){const t=this.until.get(key);if(t==null)return false;if(Date.now()>=t){this.until.delete(key);return false;}return true;},
   add(key){this.until.set(key,Date.now()+QUARANTINE_MS);}};
-export function createMotionHook(nativeRender,{endpoint,token,contract,permitted,ffprobe,ffmpeg,timeoutMs=600000,fetchImpl=fetch,requiredBackend='d3d11/nvidia',nativeReserveMs=0,nativeReserveRatio=0,healthTimeoutMs=null,remoteResource='frameshift',freshNativeBudget=false}){
+export function createMotionHook(nativeRender,{endpoint,token,contract,permitted,ffprobe,ffmpeg,timeoutMs=600000,fetchImpl=fetch,requiredBackend='d3d11/nvidia',nativeReserveMs=0,nativeReserveRatio=0,healthTimeoutMs=null,remoteResource='frameshift',freshNativeBudget=false,homeShare=null}){
   const base=new URL(endpoint);if(base.protocol!=='http:'||base.username||base.password||base.pathname!=='/'||base.search||base.hash||!(['127.0.0.1','localhost','[::1]'].includes(base.hostname)||(base.hostname==='10.0.3.1'&&base.port==='18191')))throw Error('private tunnel required');
   const homeKey=base.origin+'|'+contract;
   return async function(options,{signal,duration}={}){
@@ -29,7 +31,10 @@ export function createMotionHook(nativeRender,{endpoint,token,contract,permitted
     // A relative reserve keeps most of the deadline for server CPU recovery when Home is slow or lost.
     const ratioReserve=Number.isFinite(nativeReserveRatio)&&nativeReserveRatio>0&&nativeReserveRatio<1?Math.min(Math.max(0,budget-1),Math.ceil(budget*nativeReserveRatio)):0;
     const reserve=Math.max(fixedReserve,ratioReserve);
-    const controller=new AbortController();let timer=setTimeout(()=>controller.abort(Error('motion timeout')),budget-reserve);
+    // homeShare (PC Boost motionHomeShare): Home may use this share of the deadline, also beyond it (capped at Home's limit).
+    const shareMode=freshNativeBudget&&Number.isFinite(homeShare)&&homeShare>=HOME_SHARE_MIN&&homeShare<=HOME_SHARE_MAX;
+    const homeMs=shareMode?Math.min(HOME_LIMIT_MS,Math.ceil(budget*homeShare)):budget-reserve,homeDeadline=Date.now()+homeMs;
+    const controller=new AbortController();let timer=setTimeout(()=>controller.abort(Error('motion timeout')),homeMs);
     const abort=()=>controller.abort(signal.reason);signal?.addEventListener('abort',abort,{once:true});
     const part=options.targetPath+'.motion-'+id+'.part';
     let possibleRemote=false,endRemote=null;
@@ -38,12 +43,12 @@ export function createMotionHook(nativeRender,{endpoint,token,contract,permitted
       const assets=[];let total=0;for(const a of options.assets??[]){const b=await fs.readFile(a.localPath);total+=b.length;if(total>MAX)throw Error('input size');assets.push({filename:a.filename,sha256:hash(b),data:b.toString('base64')});}
       const healthSignal=Number.isFinite(healthTimeoutMs)&&healthTimeoutMs>0?AbortSignal.any([controller.signal,AbortSignal.timeout(Math.ceil(healthTimeoutMs))]):controller.signal;
       const health=await fetchImpl(new URL('/motion/health',base),{headers,signal:healthSignal});if(!health.ok)throw Error('Home offline');
-      const payload={version:1,id,contract,compositionHtml:options.compositionHtml,renderOnlyHtml:options.renderOnlyHtml??'',assets,fps:options.fps,resolution:options.resolution,workers:sourceWorkers,quality:options.quality??'standard',duration,timeoutMs:Math.max(1,Math.floor(deadline-Date.now()-reserve))};
+      const payload={version:1,id,contract,compositionHtml:options.compositionHtml,renderOnlyHtml:options.renderOnlyHtml??'',assets,fps:options.fps,resolution:options.resolution,workers:sourceWorkers,quality:options.quality??'standard',duration,timeoutMs:Math.max(1,Math.floor(homeDeadline-Date.now()))};
       possibleRemote=true;endRemote=remoteActive.begin(remoteResource);
       const response=await fetchImpl(new URL('/motion/render',base),{method:'POST',headers,body:JSON.stringify(payload),signal:controller.signal});
       if(!response.ok)throw Error('Home unavailable');
       // Home has rendered: receiving and verifying may use the whole budget; the native fallback keeps its own fresh budget.
-      if(freshNativeBudget){clearTimeout(timer);timer=setTimeout(()=>controller.abort(Error('motion receive timeout')),Math.max(1,deadline-Date.now()));}
+      if(freshNativeBudget){clearTimeout(timer);timer=setTimeout(()=>controller.abort(Error('motion receive timeout')),Math.max(shareMode?RECEIVE_MIN_MS:1,deadline-Date.now()));}
       const reader=response.body.getReader();const chunks=[];let size=0;for(;;){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>48*1024*1024){await reader.cancel();throw Error('response size');}chunks.push(value);}
       const result=JSON.parse(Buffer.concat(chunks).toString());const bytes=Buffer.from(result.data??'','base64');
       if(result.version!==1||result.id!==id||result.contract!==contract||result.backend!==requiredBackend||bytes.length>MAX||hash(bytes)!==result.sha256)throw Error('receipt mismatch');

@@ -28,11 +28,12 @@ function database() {
 }
 const row = (db, key) => JSON.parse(db.prepare('SELECT value_json FROM app_settings WHERE key = ?').get(key).value_json);
 
-test('motion settings are bounded (slots 1..4, Home share 50..90 %) and default to 2 / 70', () => {
+test('motion settings are bounded (slots 1..4, Home share 50..200 %) and default to 2 / 70', () => {
   assert.equal(api.DEFAULT_CONFIG.motionSlots, 2);
   assert.equal(api.DEFAULT_CONFIG.motionHomeShare, 70);
   assert.equal(api.validateConfig({ motionSlots: 4, motionHomeShare: 90 }).motionSlots, 4);
-  for (const patch of [{ motionSlots: 0 }, { motionSlots: 5 }, { motionSlots: 2.5 }, { motionHomeShare: 49 }, { motionHomeShare: 91 }, { motionHomeShare: '80' }]) {
+  assert.equal(api.validateConfig({ motionHomeShare: 200 }).motionHomeShare, 200);
+  for (const patch of [{ motionSlots: 0 }, { motionSlots: 5 }, { motionSlots: 2.5 }, { motionHomeShare: 49 }, { motionHomeShare: 201 }, { motionHomeShare: '80' }]) {
     assert.throws(() => api.validateConfig(patch), error => error.status === 400, JSON.stringify(patch));
   }
   assert.ok(!api.PC_CONFIG_KEYS.includes('motionSlots') && !api.PC_CONFIG_KEYS.includes('motionHomeShare'), 'server-side only, never pushed to Home');
@@ -69,6 +70,8 @@ test('a legacy pc_boost row (written before this change) loads with motion defau
 test('motionLimits reads the published runtime file values with safe fallbacks', () => {
   assert.deepEqual(motionLimits({ motionSlots: 4, motionHomeShare: 90 }), { motionSlots: 4, motionHomeShare: 90 });
   assert.deepEqual(motionLimits({ motionSlots: 7, motionHomeShare: 20 }), { motionSlots: 2, motionHomeShare: 70 });
+  assert.deepEqual(motionLimits({ motionSlots: 1, motionHomeShare: 150 }), { motionSlots: 1, motionHomeShare: 150 });
+  assert.equal(motionLimits({ motionHomeShare: 201 }).motionHomeShare, 70);
   assert.deepEqual(motionLimits(null), { motionSlots: 2, motionHomeShare: 70 });
 });
 
