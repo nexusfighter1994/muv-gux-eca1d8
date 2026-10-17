@@ -1,0 +1,156 @@
+{
+  "timeUtc": "2026-10-11T11:54:06.101059+00:00",
+  "apiDesired": {
+    "desired": null,
+    "revision": null
+  },
+  "observed": {
+    "downMbit": 120,
+    "upMbit": 37
+  },
+  "plannedChanges": 0,
+  "identity": {
+    "device": "veth34600da",
+    "ifindex": 6600,
+    "mac": "82:48:eb:eb:f5:b1",
+    "peer_ifindex": 2,
+    "container_id": "208e27bcdfabad09b771eddbb296fe81fc3bbedb3a2f85b11c64429162af3a43",
+    "bridge": "br-fa616661ab66",
+    "mtu": 1500
+  },
+  "containerId": "208e27bcdfabad09b771eddbb296fe81fc3bbedb3a2f85b11c64429162af3a43",
+  "containerStartedAt": "2026-10-11T10:13:45.792186339Z",
+  "containerHealth": "healthy",
+  "listeners": "State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess                                    \nLISTEN 0      128         10.0.3.1:18191      0.0.0.0:*    users:((\"sshd-session\",pid=3450002,fd=10))\nLISTEN 0      128         10.0.3.1:18194      0.0.0.0:*    users:((\"sshd-session\",pid=3450002,fd=11))\n",
+  "ifbs": {
+    "vfboostdn": {
+      "handle": "7a01:",
+      "kind": "tbf",
+      "rateBytesPerSecond": 15000000,
+      "burstBytes": 149999,
+      "limitBytes": 3750000,
+      "bytes": 6594466,
+      "packets": 5615,
+      "drops": 0,
+      "backlog": 0
+    },
+    "vfboostup": {
+      "handle": "7a02:",
+      "kind": "tbf",
+      "rateBytesPerSecond": 4625000,
+      "burstBytes": 65535,
+      "limitBytes": 1156250,
+      "bytes": 3891163,
+      "packets": 3662,
+      "drops": 0,
+      "backlog": 0
+    }
+  },
+  "filters": {
+    "ingress": [
+      {
+        "pref": 49191,
+        "handle": 1,
+        "keys": {
+          "eth_type": "ipv4",
+          "ip_proto": "tcp",
+          "dst_ip": "10.0.3.1",
+          "src_ip": "10.0.3.21",
+          "dst_port": 18191
+        },
+        "target": "vfboostdn",
+        "stats": {
+          "bytes": 2744870,
+          "packets": 2924,
+          "drops": 0,
+          "overlimits": 0,
+          "requeues": 0,
+          "backlog": 0,
+          "qlen": 0
+        }
+      },
+      {
+        "pref": 49194,
+        "handle": 1,
+        "keys": {
+          "eth_type": "ipv4",
+          "ip_proto": "tcp",
+          "dst_ip": "10.0.3.1",
+          "src_ip": "10.0.3.21",
+          "dst_port": 18194
+        },
+        "target": "vfboostdn",
+        "stats": {
+          "bytes": 3560022,
+          "packets": 2691,
+          "drops": 0,
+          "overlimits": 0,
+          "requeues": 0,
+          "backlog": 0,
+          "qlen": 0
+        }
+      }
+    ],
+    "egress": [
+      {
+        "pref": 49191,
+        "handle": 1,
+        "keys": {
+          "eth_type": "ipv4",
+          "ip_proto": "tcp",
+          "dst_ip": "10.0.3.21",
+          "src_ip": "10.0.3.1",
+          "src_port": 18191
+        },
+        "target": "vfboostup",
+        "stats": {
+          "bytes": 3792851,
+          "packets": 3323,
+          "drops": 0,
+          "overlimits": 0,
+          "requeues": 0,
+          "backlog": 0,
+          "qlen": 0
+        }
+      },
+      {
+        "pref": 49194,
+        "handle": 1,
+        "keys": {
+          "eth_type": "ipv4",
+          "ip_proto": "tcp",
+          "dst_ip": "10.0.3.21",
+          "src_ip": "10.0.3.1",
+          "src_port": 18194
+        },
+        "target": "vfboostup",
+        "stats": {
+          "bytes": 98312,
+          "packets": 339,
+          "drops": 0,
+          "overlimits": 0,
+          "requeues": 0,
+          "backlog": 0,
+          "qlen": 0
+        }
+      }
+    ]
+  },
+  "vfRoot": {
+    "kind": "noqueue",
+    "handle": "0:",
+    "root": true,
+    "refcnt": 2,
+    "options": {},
+    "bytes": 0,
+    "packets": 0,
+    "drops": 0,
+    "overlimits": 0,
+    "requeues": 0,
+    "backlog": 0,
+    "qlen": 0
+  },
+  "service": "MainPID=622349\nNRestarts=0\nActiveState=active\nSubState=running\nUnitFileState=enabled\n",
+  "unchangedApiRevision": true,
+  "containerAndTunnelUnchanged": true
+}

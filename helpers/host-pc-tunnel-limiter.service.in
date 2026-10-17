@@ -1,0 +1,34 @@
+[Unit]
+Description=Owned aggregate VF home-boost directional tunnel limiter
+Wants=network-online.target
+After=network-online.target docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -B /opt/aufsetzen/vf-custom/helpers/host_pc_tunnel_limiter.py
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+KillMode=control-group
+StateDirectory=vf-pc-tunnel-limiter
+StateDirectoryMode=0700
+RuntimeDirectory=vf-pc-tunnel-limiter
+RuntimeDirectoryMode=0700
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_DAC_READ_SEARCH
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

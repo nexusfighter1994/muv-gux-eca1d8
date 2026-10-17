@@ -1,0 +1,8 @@
+pc-transfer-settings { display: block; min-width: 0; }
+.vf-pc-transfer { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--vc-border); letter-spacing: 0; }
+.vf-pc-transfer__readback { margin: 0 0 16px; font-size: 12px; color: var(--vc-text-dim); }
+.vf-pc-transfer__readback > div { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 3fr); gap: 12px; padding: 8px 0; }
+.vf-pc-transfer__readback output, .vf-pc-transfer [data-transfer-state] { min-width: 0; overflow-wrap: anywhere; line-height: 1.5; }
+@media (max-width: 480px) {
+  .vf-pc-transfer__readback > div { grid-template-columns: 1fr; gap: 4px; }
+}

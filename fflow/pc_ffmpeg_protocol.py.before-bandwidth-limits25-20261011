@@ -1,0 +1,176 @@
+"""Small, closed protocol for file-only video encodes. No shell or file filters."""
+import re
+
+MAX_INPUT = 64 * 1024 * 1024
+MAX_TOTAL = 96 * 1024 * 1024
+# Scene-detection sources (blob store only; render inputs keep MAX_INPUT/MAX_TOTAL).
+SCENE_MAX_INPUT = 400 * 1024 * 1024
+MAX_OUTPUT = 512 * 1024 * 1024
+MAX_BODY = 140 * 1024 * 1024
+DEFAULTS = dict(enabled=False, cpuWorkers=5, gpuWorkers=4,
+                siglipEnabled=True, siglipConcurrency=1)
+FLAGS = {'-y', '-n', '-hide_banner', '-nostats', '-stats', '-nostdin', '-an', '-vn', '-sn', '-dn', '-shortest'}
+VALUES = {'-i', '-c:v', '-codec:v', '-vcodec', '-c:a', '-b:a', '-ar', '-ac', '-crf', '-preset', '-pix_fmt', '-r', '-s',
+          '-vf', '-filter:v', '-filter_complex', '-map', '-t', '-ss', '-to', '-threads',
+          '-filter_threads', '-filter_complex_threads', '-progress', '-loglevel', '-v',
+          '-movflags', '-loop', '-stream_loop', '-framerate', '-fps_mode', '-vsync',
+          '-video_track_timescale', '-avoid_negative_ts', '-max_muxing_queue_size',
+          '-b:v', '-maxrate', '-bufsize', '-profile:v', '-level:v', '-f',
+          '-metadata', '-g', '-keyint_min', '-sc_threshold', '-flags',
+          '-color_primaries', '-color_trc', '-colorspace', '-color_range', '-sws_flags',
+          '-frames', '-frames:v', '-q:v', '-q:a', '-af', '-filter:a', '-sample_fmt', '-c'}
+FILTERS = {'scale', 'scale2ref', 'crop', 'pad', 'setsar', 'setdar', 'fps', 'setpts', 'trim',
+           'format', 'zoompan', 'overlay', 'xfade', 'concat', 'split', 'null', 'fade',
+           'transpose', 'hflip', 'vflip', 'rotate', 'eq', 'colorbalance', 'colorchannelmixer',
+           'unsharp', 'gblur', 'boxblur', 'drawbox', 'tpad', 'loop', 'select', 'interpolate',
+           'minterpolate', 'tmix', 'tblend', 'settb', 'atrim', 'asetpts', 'aresample',
+           'aformat', 'anull', 'apad', 'afade', 'volume', 'amix', 'amerge', 'asplit',
+           'adelay', 'atempo', 'loudnorm', 'highpass', 'lowpass', 'acompressor', 'alimiter'}
+FILE_NAME = re.compile(r'@[0-9]+\.(?:mp4|mov|mkv|webm|png|jpg|jpeg|webp|bmp|mp3|wav|m4a|aac|flac)', re.I)
+OUTPUT_NAME = re.compile(r'output\.(?:mp4|png|jpg|jpeg|wav|mp3|m4a|aac|flac)')
+
+
+def checked_config(update, current=None):
+    if not isinstance(update, dict) or set(update) - set(DEFAULTS):
+        raise ValueError('Unknown configuration keys')
+    result = dict(DEFAULTS if current is None else current)
+    for key, value in update.items():
+        if key in ('enabled', 'siglipEnabled'):
+            if type(value) is not bool:
+                raise ValueError('Boolean required')
+        elif type(value) is not int or not 0 <= value <= (16 if key == 'cpuWorkers' else 8):
+            raise ValueError('Worker count outside safe range')
+        result[key] = value
+    return result
+
+
+def validate_filter(value):
+    if len(value) > 32768 or any(c in value for c in ('\n', '\r', '\x00')):
+        raise ValueError('Invalid filter')
+    # Split only real graph delimiters, not commas inside quoted expressions.
+    pieces, start, quote, depth, escaped = [], 0, None, 0, False
+    for pos, char in enumerate(value):
+        if escaped:
+            escaped = False
+            continue
+        if char == '\\':
+            escaped = True
+            continue
+        if char in "'\"":
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+        elif quote is None:
+            if char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+            elif char in ',;' and depth == 0:
+                pieces.append(value[start:pos])
+                start = pos + 1
+    if quote or depth or escaped:
+        raise ValueError('Unbalanced filter expression')
+    pieces.append(value[start:])
+    for piece in pieces:
+        match = re.match(r'^\s*(?:\[[A-Za-z0-9_:]+\]\s*)*([a-z0-9_]+)(?:=|\[|\s*$)', piece)
+        if not match or match[1] not in FILTERS:
+            raise ValueError('Unsupported filter')
+
+
+def validate_argv(argv, file_names):
+    if not isinstance(argv, list) or not 3 <= len(argv) <= 256 or not all(isinstance(x, str) and len(x) < 32769 and '\x00' not in x for x in argv):
+        raise ValueError('Invalid argv')
+    if not file_names or len(file_names) > 8 or any(not FILE_NAME.fullmatch(x) for x in file_names):
+        raise ValueError('Invalid file names')
+    if not OUTPUT_NAME.fullmatch(argv[-1]):
+        raise ValueError('Only one supported media output is allowed')
+    image_output = argv[-1].endswith(('.png', '.jpg', '.jpeg'))
+    audio_output = argv[-1].endswith(('.mp3', '.wav', '.m4a', '.aac', '.flac'))
+    positions, codecs, pos = [], [], 0
+    while pos < len(argv) - 1:
+        key = argv[pos]
+        if key in FLAGS:
+            pos += 1
+            continue
+        if key not in VALUES or pos + 1 >= len(argv) - 1:
+            raise ValueError('Unsupported option')
+        value = argv[pos + 1]
+        if key == '-i':
+            if value not in file_names:
+                raise ValueError('Only attached inputs are allowed')
+            positions.append(pos + 1)
+        elif key in ('-vf', '-filter:v', '-filter_complex', '-af', '-filter:a'):
+            validate_filter(value)
+        elif key in ('-c:v', '-codec:v', '-vcodec'):
+            if value != 'libx264':
+                raise ValueError('Only original x264 video encodes can offload')
+            codecs.append(value)
+        elif key == '-progress':
+            if value != 'pipe:1':
+                raise ValueError('Invalid progress sink')
+        elif key == '-c:a':
+            if value not in ('aac', 'copy', 'pcm_s16le', 'pcm_s24le', 'pcm_f32le', 'libmp3lame', 'flac'):
+                raise ValueError('Unsupported audio encoder')
+        elif key == '-c':
+            if value != 'copy':
+                raise ValueError('Unsupported stream encoder')
+        elif key in ('-frames', '-frames:v'):
+            if value != '1' or not image_output:
+                raise ValueError('Only single-frame images supported')
+        elif key == '-metadata':
+            if value != 'encoder=fflow-api' and not re.fullmatch(r'title=fflow composition [A-Za-z0-9_-]{1,128}', value):
+                raise ValueError('Only known FFlow metadata is supported')
+        elif key in ('-g', '-keyint_min'):
+            if not re.fullmatch(r'[0-9]{1,3}', value) or not 1 <= int(value) <= 600:
+                raise ValueError('Invalid GOP interval')
+        elif key == '-sc_threshold':
+            if value != '0':
+                raise ValueError('Only the native disabled scene-cut threshold is supported')
+        elif key == '-flags':
+            if value != '+cgop':
+                raise ValueError('Only native closed-GOP flags are supported')
+        elif key == '-f':
+            if value != 'mp4':
+                raise ValueError('Unsupported container')
+        elif key in ('-threads', '-filter_threads', '-filter_complex_threads'):
+            if not value.isdigit() or not 1 <= int(value) <= 16:
+                raise ValueError('Invalid thread cap')
+        elif key == '-map':
+            if not re.fullmatch(r'(?:[0-7](?::[va](?::[0-9])?)?\??|\[[A-Za-z0-9_]+\])', value):
+                raise ValueError('Only video maps are supported')
+        elif not re.fullmatch(r'[A-Za-z0-9_.:+/=-]{1,128}', value):
+            raise ValueError('Invalid option value')
+        pos += 2
+    if not positions or not (codecs or image_output or audio_output or '-c' in argv) or set(argv[i] for i in positions) != set(file_names):
+        raise ValueError('Self-contained video encode required')
+    return positions
+
+
+def nvenc_argv(argv):
+    """Lossless only, and only formats supported by the verified GPU probe."""
+    # Published chunks carry voiceover and must keep the native High-profile
+    # CPU encode. Lossless NVENC remains useful for explicitly silent visuals.
+    if '-an' not in argv:
+        return None
+    if argv[-1] != 'output.mp4' or '-pix_fmt' not in argv or argv[argv.index('-pix_fmt') + 1] != 'yuv420p':
+        return None
+    if '-c:v' not in argv or argv[argv.index('-c:v') + 1] != 'libx264':
+        return None
+    if any(x in argv for x in ('-af', '-filter:a')) or ('-filter_complex' in argv and re.search(r'\b(?:amix|atrim|asetpts|aformat|anull|apad|afade|aresample|asplit|volume|adelay)\b', argv[argv.index('-filter_complex') + 1])):
+        return None
+    if any(key in argv for key in ('-b:v', '-maxrate', '-bufsize', '-profile:v', '-level:v')):
+        return None
+    result, index = [], 0
+    while index < len(argv) - 1:
+        key = argv[index]
+        if key in ('-crf', '-preset'):
+            index += 2
+            continue
+        if key in ('-c:v', '-codec:v', '-vcodec'):
+            result.extend([key, 'h264_nvenc'])
+            index += 2
+            continue
+        result.append(key)
+        index += 1
+    return result + ['-preset', 'lossless', argv[-1]]

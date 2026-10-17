@@ -1,0 +1,48 @@
+pc-boost-settings { display: block; min-width: 0; }
+.vf-homepc-row { min-width: 0; }
+.vf-homepc-row .vc-faint { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+.vf-pc-boost { padding: 24px 0; margin: 16px 0; border-top: 1px solid var(--vc-border); border-bottom: 1px solid var(--vc-border); color: var(--vc-text); letter-spacing: 0; }
+.vf-pc-boost__head, .vf-pc-boost__footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+.vf-pc-boost .vc-settings__title { margin: 0; font-size: 18px; line-height: 1.4; }
+.vf-pc-boost__state { color: var(--vc-text-dim); font-size: 13px; line-height: 1.5; }
+.vf-pc-boost__state[data-enabled="true"] { color: var(--vc-ok); }
+.vf-pc-boost fieldset { border: 0; padding: 0; margin: 20px 0 16px; min-width: 0; }
+.vf-pc-boost__toggles { display: flex; flex-wrap: wrap; gap: 14px 32px; margin-bottom: 20px; }
+.vf-pc-boost__toggles label { display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 14px; cursor: pointer; }
+.vf-pc-boost input[type="checkbox"] { width: 18px; height: 18px; flex: 0 0 18px; margin: 0; accent-color: var(--vc-accent); }
+.vf-pc-boost__limits { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; max-width: 880px; }
+.vf-pc-boost__limits label { display: grid; gap: 8px; font-size: 13px; color: var(--vc-text-dim); min-width: 0; }
+.vf-pc-boost__limits .vc-input { width: 100%; min-width: 0; min-height: 40px; border-radius: 6px; font-size: 14px; }
+.vf-pc-boost__telemetry { margin: 16px 0 20px; font-size: 13px; }
+.vf-pc-boost__boost { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--vc-border); }
+.vf-pc-boost__subtitle { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+.vf-pc-boost__hint { margin: 0 0 14px; font-size: 12px; line-height: 1.5; max-width: 660px; }
+.vf-pc-boost__boost .vf-pc-boost__limits { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 440px; }
+.vf-pc-boost__boost-state { margin: 12px 0 0; font-size: 12px; color: var(--vc-text-dim); }
+.vf-pc-boost__boost-state[data-active="true"] { color: var(--vc-accent); }
+.vf-pc-boost__bandwidth { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--vc-border); }
+.vf-pc-boost__bandwidth .vf-pc-boost__limits { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 560px; }
+.vf-pc-boost__uncapped { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--vc-text-dim); }
+.vf-pc-boost__bandwidth-state { line-height: 1.5; overflow-wrap: anywhere; min-width: 0; }
+.vf-pc-boost__telemetry > div { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(110px, 1fr) minmax(80px, .7fr); gap: 12px; align-items: center; min-height: 40px; padding: 10px 0; border-bottom: 1px solid var(--vc-border); }
+.vf-pc-boost__telemetry strong { font-weight: 500; }
+.vf-pc-boost__telemetry span, .vf-pc-boost__telemetry output { overflow-wrap: anywhere; min-width: 0; }
+.vf-pc-boost__telemetry output { font-variant-numeric: tabular-nums; }
+.vf-pc-boost__column { color: var(--vc-text-faint); }
+.vf-pc-boost__footer { font-size: 12px; }
+.vf-pc-boost__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.vf-pc-boost .vc-btn { min-height: 36px; border-radius: 6px; white-space: normal; }
+.vf-pc-boost__message { min-height: 20px; margin: 12px 0 0; font-size: 13px; color: var(--vc-text-dim); line-height: 1.5; overflow-wrap: anywhere; }
+.vf-pc-boost :focus-visible { outline: 2px solid var(--vc-accent); outline-offset: 3px; }
+@media (max-width: 760px) {
+  .vf-pc-boost__limits { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+  .vf-pc-boost__limits { grid-template-columns: 1fr; gap: 12px; }
+  .vf-pc-boost__boost .vf-pc-boost__limits { grid-template-columns: 1fr; max-width: none; }
+  .vf-pc-boost__bandwidth .vf-pc-boost__limits { grid-template-columns: 1fr; max-width: none; }
+  .vf-pc-boost__limits label { grid-template-columns: minmax(0, 1fr) 104px; align-items: center; }
+  .vf-pc-boost__telemetry > div { grid-template-columns: minmax(85px, 1fr) minmax(90px, 1fr) minmax(65px, .7fr); gap: 8px; font-size: 12px; }
+  .vf-pc-boost__actions { width: 100%; }
+  .vf-pc-boost__actions .vc-btn { flex: 1 1 125px; }
+}

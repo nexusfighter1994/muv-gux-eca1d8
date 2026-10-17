@@ -1,0 +1,78 @@
+.vfc-body { margin: 0; min-height: 100vh; background: var(--vc-bg, #0b0b0c); color: var(--vc-text, #ececea); font-family: Inter, system-ui, sans-serif; letter-spacing: 0; }
+.vfc-main { box-sizing: border-box; max-width: 1160px; margin: 0 auto; padding: 24px 24px 48px; min-width: 0; }
+.vfc-main *, .vfc-main *::before, .vfc-main *::after { box-sizing: border-box; }
+.vfc-head { margin-bottom: 20px; }
+.vfc-head h1 { margin: 8px 0; font-size: 24px; line-height: 1.3; }
+.vfc-back, .vfc-nav a { color: var(--vc-accent, #e08a2e); text-decoration: none; font-size: 13px; }
+.vfc-back:hover, .vfc-nav a:hover { text-decoration: underline; }
+.vfc-editor { display: block; min-width: 0; font-size: 13px; line-height: 1.5; }
+.vfc-toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 14px; }
+.vfc-search { display: grid; gap: 5px; flex: 1 1 280px; max-width: 440px; color: var(--vc-text-dim, #b8b8bb); }
+.vfc-checked { font-size: 12px; align-self: center; }
+.vfc-nav { display: flex; flex-wrap: wrap; gap: 12px 24px; padding-bottom: 16px; border-bottom: 1px solid var(--vc-border, #303033); }
+.vfc-group { margin: 0; padding: 24px 0 8px; border: 0; border-radius: 0; background: none; scroll-margin-top: 16px; }
+.vfc-group > h2 { margin: 0 0 8px; font-size: 18px; line-height: 1.4; }
+.vfc-mod { padding: 14px 0; border-bottom: 1px solid var(--vc-border, #303033); min-width: 0; }
+.vfc-mod-head { display: grid; grid-template-columns: minmax(0, 1fr) 132px; align-items: start; gap: 16px; }
+.vfc-mod-details { min-width: 0; }
+.vfc-mod-title { cursor: pointer; width: fit-content; max-width: 100%; font-size: 12px; margin-top: 8px; color: var(--vc-text-dim, #b8b8bb); }
+.vfc-mod-name { font-size: 14px; font-weight: 600; line-height: 1.5; margin: 0; }
+.vfc-description { color: var(--vc-text-dim, #b8b8bb); margin: 6px 0 0; max-width: 850px; }
+.vfc-mod-body { margin-top: 8px; }
+.vfc-toggle { display: flex; align-items: center; gap: 8px; min-height: 28px; cursor: pointer; }
+.vfc-toggle input, .vfc-control input[type="checkbox"] { width: 18px; height: 18px; margin: 0; flex: 0 0 18px; accent-color: var(--vc-accent, #e08a2e); }
+.vfc-state, .vfc-hooks { margin: 6px 0 0; font-size: 12px; color: var(--vc-text-dim, #b8b8bb); }
+.vfc-state[data-pending="true"] { color: var(--vc-accent, #e08a2e); }
+.vfc-settings-form { padding-top: 12px; margin: 0; }
+.vfc-settings-fields { display: grid; gap: 16px; margin-bottom: 12px; }
+.vfc-field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(160px, 240px); gap: 16px; align-items: start; }
+.vfc-field-copy, .vfc-control { min-width: 0; }
+.vfc-field-label { display: block; font-size: 13px; color: var(--vc-text, #ececea); }
+.vfc-hint, .vfc-meta { font-size: 12px; margin: 3px 0 0; }
+.vfc-control { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.vfc-editor .vc-input { box-sizing: border-box; min-width: 0; width: 100%; min-height: 38px; border: 1px solid var(--vc-border, #303033); border-radius: 5px; background: var(--vc-bg, #0b0b0c); color: var(--vc-text, #ececea); padding: 8px 10px; font: inherit; }
+.vfc-control input[type="number"] { width: 112px; font-variant-numeric: tabular-nums; }
+.vfc-efforts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.vfc-efforts .vc-btn { justify-self: start; }
+.vfc-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.vfc-main .vc-btn { max-width: 100%; white-space: normal; min-height: 36px; border-radius: 5px; letter-spacing: 0; }
+.vfc-editor .vc-btn { padding: 7px 12px; border: 1px solid var(--vc-border, #303033); background: transparent; color: var(--vc-text, #ececea); cursor: pointer; font: inherit; }
+.vfc-editor .vc-btn--primary { background: var(--vc-accent, #e08a2e); color: #111; border-color: transparent; }
+.vfc-editor .vc-btn:disabled, .vfc-editor input:disabled, .vfc-editor select:disabled { cursor: default; opacity: .55; }
+.vfc-savebar { position: sticky; bottom: 0; z-index: 5; margin-top: 20px; padding: 12px 0 max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--vc-border, #303033); background: var(--vc-bg, #0b0b0c); display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.vfc-savebar > .vfc-actions { margin-left: auto; }
+.vfc-message { min-height: 0; margin: 8px 0 0; font-size: 13px; }
+.vfc-savebar .vfc-message { flex-basis: 100%; margin: 0; }
+.vfc-message:empty { display: none; }
+.vfc-error { color: var(--vc-danger, #ee9696); }
+.vfc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.vfc-table caption { text-align: left; padding: 12px 0; }
+.vfc-table th, .vfc-table td { text-align: left; padding: 8px 10px 8px 0; border-bottom: 1px solid var(--vc-border, #303033); vertical-align: top; }
+.vfc-table th { font-weight: 500; }
+.vfc-table thead { color: var(--vc-text-dim, #b8b8bb); }
+.vfc-integration { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--vc-border, #303033); }
+.vfc-integration > summary { cursor: pointer; font-size: 14px; }
+.vfc-main p, .vfc-main label, .vfc-main h3, .vfc-main th, .vfc-main td, .vfc-main button { overflow-wrap: anywhere; }
+.vfc-main .vc-muted { color: var(--vc-text-dim, #b8b8bb); }
+.vfc-main :focus-visible { outline: 2px solid var(--vc-accent, #e08a2e); outline-offset: 3px; }
+.vfc-main [hidden] { display: none !important; }
+#pc-boost-host { min-width: 0; border-radius: 0; background: none; padding: 0; margin-top: 16px; }
+#pc-boost-host .vf-pc-boost { border-top: 0; padding-top: 0; margin-top: 0; }
+@media (max-width: 640px) {
+  .vfc-main { padding: 18px 16px 36px; }
+  .vfc-field { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .vfc-mod-head { grid-template-columns: minmax(0, 1fr) 106px; gap: 10px; }
+  .vfc-control { max-width: 100%; }
+  .vfc-efforts { max-width: 360px; }
+  .vfc-savebar > .vfc-actions { margin-left: 0; }
+  .vfc-savebar { position: static; }
+  .vfc-toolbar { align-items: start; }
+  .vfc-search { max-width: none; flex-basis: 100%; }
+  .vfc-table { table-layout: fixed; }
+  .vfc-table th:first-child { width: 47%; }
+}
+@media (max-width: 380px) {
+  .vfc-mod-head { grid-template-columns: minmax(0, 1fr); }
+  .vfc-toggle { min-height: 36px; }
+  .vfc-efforts { grid-template-columns: minmax(0, 1fr); }
+}
