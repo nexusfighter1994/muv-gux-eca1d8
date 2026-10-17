@@ -6,7 +6,7 @@ import cp from 'node:child_process';
 import {syncBuiltinESMExports} from 'node:module';
 import {promisify} from 'node:util';
 import {pathToFileURL,fileURLToPath} from 'node:url';
-import {KIND as ALPHA_KIND,execute as executeAlpha} from './alpha-worker.mjs';
+import {KIND as ALPHA_KIND,execute as executeAlpha,proveBackend,probeHardwareGpu} from './alpha-worker.mjs';
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 const execFile=promisify(cp.execFile);
 export const MAX=32*1024*1024;
@@ -24,7 +24,7 @@ export async function verify(file,p,ffprobe='ffprobe',ffmpeg='ffmpeg',signal){
   if(!v||result.streams.length!==1||v.codec_name!=='h264'||v.profile!=='High'||v.time_base!=='1/12288'||v.pix_fmt!=='yuv420p'||v.width!==1920||v.height!==1080||v.avg_frame_rate!=='24/1'||Number(v.nb_read_frames)!==Math.ceil(p.duration*24)||Math.abs(Number(v.duration)-Math.ceil(p.duration*24)/24)>.002)throw Error('output contract');
   await execFile(ffmpeg,['-v','error','-xerror','-i',file,'-map','0:v:0','-f','null','-'],{timeout:30000,windowsHide:true,signal});return v;
 }
-export async function execute(p,config){
+export async function execute(p,config,{probeGpu=probeHardwareGpu}={}){
   validate(p,config.contract);
   for(const [file,expected]of Object.entries(config.files))if(hash(await fs.readFile(file))!==expected)throw Error('runtime changed');
   const root=await fs.mkdtemp(path.join(process.env.VF_MOTION_JOB_ROOT??os.tmpdir(),'vfmo-'));const output=path.join(root,'result.mp4');
@@ -42,8 +42,9 @@ export async function execute(p,config){
     const native=await import(pathToFileURL(config.renderModule));
     await native.render({compositionHtml:p.compositionHtml,renderOnlyHtml:p.renderOnlyHtml,assets,fps:p.fps,resolution:p.resolution,workers:p.workers,quality:p.quality,targetPath:output,workDir:root,timeoutMs:p.timeoutMs});
     const probe=await verify(output,p,config.ffprobe,config.ffmpeg);const bytes=await fs.readFile(output);if(bytes.length>MAX)throw Error('output size');
-    let backend=null;const scan=async dir=>{for(const e of await fs.readdir(dir,{withFileTypes:true})){const f=path.join(dir,e.name);if(e.isDirectory())await scan(f);else if(e.name==='perf-summary.json'){const s=await fs.readFile(f,'utf8');if(/"gpuRenderer"\s*:\s*"d3d11\/nvidia"/.test(s))backend='d3d11/nvidia';}}};await scan(root);
-    if(!backend)throw Error('hardware proof missing');
+    let backend=null;const perfs=[];const scan=async dir=>{for(const e of await fs.readdir(dir,{withFileTypes:true})){const f=path.join(dir,e.name);if(e.isDirectory())await scan(f);else if(e.name==='perf-summary.json'){const s=await fs.readFile(f,'utf8');if(/"gpuRenderer"\s*:\s*"d3d11\/nvidia"/.test(s))backend='d3d11/nvidia';try{perfs.push(JSON.parse(s).drawElement);}catch{perfs.push(null);}}}};await scan(root);
+    // Parallel capture (workers > 1) records no renderer: prove the pinned browser instead (alpha-worker proveBackend).
+    if(!backend)backend=await proveBackend(perfs,()=>probeGpu(config,root));
     return {version:1,id:p.id,contract:p.contract,backend,sha256:hash(bytes),data:bytes.toString('base64'),probe};
   }finally{await fs.rm(root,{recursive:true,force:true});}
 }

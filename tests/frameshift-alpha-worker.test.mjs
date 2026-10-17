@@ -194,6 +194,63 @@ test('worker requires pinned runtime and never accepts software/no perf evidence
   });
 });
 
+async function parallelPerf(root, extra = {}) {
+  const dir = path.join(root, '.debug', 'parallel-job');
+  await fs.mkdir(dir, {recursive: true});
+  await fs.writeFile(path.join(dir, 'perf-summary.json'), JSON.stringify({drawElement: {mode: 'screenshot', clampReason: 'parallel', ...extra}}));
+}
+
+test('parallel screenshot capture is proven by probing the pinned browser, once', async () => {
+  const {execute} = await worker();
+  await temporary(async root => {
+    let probes = 0;
+    const result = await execute(payload({workers: 3, sourceWorkers: 3}), {contract, jobRoot: root}, {
+      renderNative: async o => { await fs.copyFile(await fixture(o.workDir), o.targetPath); await parallelPerf(o.workDir); },
+      probeGpu: async (config, workDir) => { probes++; assert.equal(config.contract, contract); assert.ok(workDir.startsWith(root)); return 'd3d11/nvidia'; }});
+    assert.equal(result.backend, 'd3d11/nvidia');
+    assert.equal(probes, 1);
+    assert.deepEqual(await fs.readdir(root), []);
+  });
+});
+
+test('parallel proof fails closed: software probe, probe error, unclamped screenshot, foreign renderer', async () => {
+  const {execute} = await worker();
+  await temporary(async root => {
+    const cases = [
+      [o => parallelPerf(o.workDir), async () => 'swiftshader/other'],
+      [o => parallelPerf(o.workDir), async () => { throw Error('launch failed'); }],
+      [o => parallelPerf(o.workDir, {clampReason: undefined}), async () => 'd3d11/nvidia'],
+      [o => parallelPerf(o.workDir, {gpuRenderer: 'swiftshader/other'}), async () => 'd3d11/nvidia'],
+      [async o => { await parallelPerf(o.workDir); await simulatedPerf(o.workDir, 'swiftshader'); }, async () => 'd3d11/nvidia'],
+    ];
+    for (const [perf, probeGpu] of cases) {
+      await assert.rejects(execute(payload({workers: 3, sourceWorkers: 3}), {contract, jobRoot: root}, {
+        renderNative: async o => { await fs.copyFile(await fixture(o.workDir), o.targetPath); await perf(o); }, probeGpu}), /hardware proof/);
+    }
+    assert.deepEqual(await fs.readdir(root), []);
+  });
+});
+
+test('single-worker evidence never launches the probe', async () => {
+  const {execute} = await worker();
+  await temporary(async root => {
+    const probeGpu = async () => { throw Error('probe must not run'); };
+    const result = await execute(payload(), {contract, jobRoot: root}, {probeGpu,
+      renderNative: async o => { await fs.copyFile(await fixture(o.workDir), o.targetPath); await simulatedPerf(o.workDir); }});
+    assert.equal(result.backend, 'd3d11/nvidia');
+    await assert.rejects(execute(payload(), {contract, jobRoot: root}, {probeGpu,
+      renderNative: async o => { await fs.copyFile(await fixture(o.workDir), o.targetPath); }}), /hardware proof/);
+  });
+});
+
+test('renderer classification matches the Home GTX D3D11 string and rejects SwiftShader', async () => {
+  const {classifyRenderer, HARDWARE_GPU_ARGS} = await worker();
+  assert.equal(classifyRenderer('ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Ti (0x000017C8) Direct3D11 vs_5_0 ps_5_0, D3D11)'), 'd3d11/nvidia');
+  assert.equal(classifyRenderer('ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)'), 'swiftshader/other');
+  assert.equal(classifyRenderer(null), null);
+  assert.ok(HARDWARE_GPU_ARGS.includes('--use-angle=d3d11') && !HARDWARE_GPU_ARGS.some(a => /swiftshader/.test(a)));
+});
+
 test('uploaded perf-summary asset cannot forge renderer hardware evidence', async () => {
   const {execute} = await worker();
   await temporary(async root => {
