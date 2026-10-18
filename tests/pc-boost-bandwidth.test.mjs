@@ -21,7 +21,8 @@ for (const key of workerKeys) {
 }
 test('worker defaults and independent video concurrency are unchanged', () => {
   assert.deepEqual(api.DEFAULT_CONFIG, { enabled: false, cpuWorkers: 5, gpuWorkers: 4,
-    siglipEnabled: true, siglipConcurrency: 1, sceneWorkers: 5, clipvaultBoost: 40, ffmpegBoost: 0, motionSlots: 2, motionHomeShare: 70 });
+    siglipEnabled: true, siglipConcurrency: 1, sceneWorkers: 5, clipvaultBoost: 40, ffmpegBoost: 0, motionSlots: 2, motionHomeShare: 70, siglipServerEmbeds: 1, earlyPhasePriority: true,
+    burstEnabled: false, burstStartQueue: 200, burstStopQueue: 10, burstMaxCents: 30, burstMaxHours: 12, burstGpuTypes: [] });
   assert.throws(() => api.validateConfig({ maxActiveVideos: 13 }));
 });
 test('CPU-only VF extra capacity and activity ignore shared PC GPU FFmpeg slots', () => {

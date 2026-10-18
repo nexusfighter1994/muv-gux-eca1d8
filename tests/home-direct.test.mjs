@@ -147,7 +147,7 @@ async function waitFor(predicate,label,signal){
 function concurrentFixture(t,{cliResult={offloaded:false},contextFailure,holdAfterExec=false}={}){
   const storage=new AsyncLocalStorage(),active=new Set(),ids=[],jobs=[],tasks=[];
   const stats={maxActive:0,cli:0,native:0,afterExec:0,contexts:0,sampled:0,finished:0};
-  const permits=createServerPermits({validScope:()=>true,newId:()=>String(ids.length+1),
+  const permits=createServerPermits({validScope:()=>true,newId:()=>String(ids.length+1),maxRunning:2,
     run:async(jobId,fn)=>{
       assert.ok(!active.has(jobId));active.add(jobId);
       stats.maxActive=Math.max(stats.maxActive,active.size);

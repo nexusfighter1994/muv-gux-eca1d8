@@ -50,6 +50,6 @@ test('authorization failures are never turned into a healthy connection', async 
 test('Custom uses the current GPU-decode status asset instead of the stale cached version', () => {
   // The Custom page lives in custom-page.mjs since the page split.
   const text = fs.readFileSync(new URL('../node/custom-page.mjs', import.meta.url), 'utf8');
-  assert.match(text, /pc-boost-settings-20261002\.js\?v=motion-share-20261017b/);
+  assert.match(text, /pc-boost-settings-20261002\.js\?v=motion-cpu-20261017e/);
   assert.doesNotMatch(text, /pc-boost-settings-20261002\.js\?v=connection-status-20261014a/);
 });

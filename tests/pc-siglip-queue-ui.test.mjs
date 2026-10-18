@@ -31,7 +31,7 @@ test('SigLIP admission and recovery counters supplement real worker telemetry', 
   try {
     render({ config, health, homeSiglipQueue });
     assert.equal(row.querySelector('.vc-faint').textContent,
-      '2/14 busy | GPU max 1 | 101 completed (PC total) | 8/25 admitted | 19 eligible queued | 3 native recoveries');
+      '2/14 busy | 101 completed (PC total) | 8/25 admitted | 19 eligible queued | 3 native recoveries');
     assert.equal(row.classList.contains('vc-worker-row--busy'), true);
   } finally { dom.window.close(); }
 });
@@ -43,7 +43,7 @@ test('absent queue telemetry retains the original SigLIP row and clears old queu
     for (const queue of [undefined, null]) {
       render({ config, health, homeSiglipQueue: queue });
       assert.equal(row.querySelector('.vc-faint').textContent,
-        '2/14 busy | GPU max 1 | 101 completed (PC total)');
+        '2/14 busy | 101 completed (PC total)');
     }
   } finally { dom.window.close(); }
 });
@@ -89,5 +89,13 @@ test('queue telemetry leaves sibling rows and current 14/max25 settings untouche
     for (const key of ['cpuWorkers', 'gpuWorkers', 'siglipConcurrency', 'sceneWorkers']) {
       assert.equal(settings.querySelector(`[name="${key}"]`).max, '25');
     }
+  } finally { dom.window.close(); }
+});
+
+test('server SigLIP embeddings and the PC backlog are shown while the native cap reports', () => {
+  const { dom, render, row } = fixture();
+  try {
+    render({ config, health, homeSiglipQueue, siglipServer: { embeds: 1, max: 1, waitingForPc: 1486 } });
+    assert.match(row.querySelector('.vc-faint').textContent, /server 1\/1 embeddings \| 1486 waiting for PC$/);
   } finally { dom.window.close(); }
 });

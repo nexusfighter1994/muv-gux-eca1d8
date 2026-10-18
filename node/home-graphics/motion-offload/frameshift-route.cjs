@@ -9,11 +9,16 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 
 const bypass = new AsyncLocalStorage();
 // Upper bound of parallel Home renders (the Home graphics gate has this many slots).
-const MAX_SLOTS = 4;
+const MAX_SLOTS = 8;
 // Probe admission cool-down: this many offers in a row ending on the server pause the probe.
 const PROBE_MISSES = 3, PROBE_COOLDOWN_MS = 60000;
 // Only Home failures and ineligible offers count; busy/disabled/scope refusals say nothing about Home.
-const NO_MISS = new Set(['home_busy', 'low_home_busy', 'home_disabled', 'no_scope', 'license_mismatch', 'no_frameshift_lease', 'lease_inactive']);
+const NO_MISS = new Set(['home_busy', 'low_home_busy', 'home_disabled', 'home_unready', 'no_scope', 'license_mismatch', 'no_frameshift_lease', 'lease_inactive']);
+// The PC Boost probe (every 3 s) says Home is unreachable: skip the 5 s health wait per graphic.
+const homeUnready = () => {
+  const caps = globalThis.__vfHomeCapabilities;
+  return caps?.ready === false && Number.isFinite(caps.checkedAt) && Date.now() - caps.checkedAt < 30000;
+};
 const MAIN = /<[a-zA-Z][^>]*\bdata-composition-id\s*=\s*(["'])main\1[^>]*>/g;
 const ALPHA_HEADER = /^<!doctype html>\s*<html>\s*<head>\s*<meta charset="utf-8">\s*<style>[^<]*<\/style>\s*<\/head>\s*<body>\s*<div id="root" data-composition-id="main" data-start="0" data-duration="([0-9]+(?:\.[0-9]+)?)" data-width="1920" data-height="1080">/;
 
@@ -66,7 +71,8 @@ function leaseSignal(signals, valid, pollMs = 2000) {
 }
 
 function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted, getConfig, loadOpaque, loadAlpha,
-  opaqueUrl, alphaUrl, reserveRatio = 0.3, healthTimeoutMs = 5000, maxSamples = 12, maxRemote = 2, bypass: sharedBypass, setOfferable }) {
+  opaqueUrl, alphaUrl, reserveRatio = 0.3, healthTimeoutMs = 5000, maxSamples = 12, maxRemote = 2, bypass: sharedBypass, setOfferable,
+  getBurst = () => globalThis.__vfBurst, loadPod, podUrl }) {
   // A route rebuilt in a running server must keep the bypass scope of the routes it replaces.
   const scope = sharedBypass || bypass;
   if (typeof scope?.run !== 'function' || typeof scope?.getStore !== 'function') throw new TypeError('bypass must be an AsyncLocalStorage');
@@ -127,8 +133,20 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
   };
   const offerable = () => {
     const settings = liveSettings(), caps = globalThis.__vfHomeCapabilities, now = Date.now();
-    return settings?.homeMotion === true && caps?.ready === true && now - caps.checkedAt < 20000
-      && now >= coolUntil && inflight < slotsFor(settings);
+    const home = caps?.ready === true && now - caps.checkedAt < 20000 && inflight < slotsFor(settings);
+    return settings?.homeMotion === true && now >= coolUntil && (home || podFree());
+  };
+  // Target of one offer: a Home slot first, else a free RunPod burst slot, else the server.
+  const podFree = () => { try { const b = getBurst?.()?.backend?.(); return Boolean(b) && b.inflight < b.slots; } catch { return false; } };
+  const takeTarget = settings => {
+    if (!homeUnready() && takeSlot(settings)) return { type: 'home' };
+    let lease = null;
+    try { lease = getBurst?.()?.acquire?.() ?? null; } catch { lease = null; }
+    return lease ? { type: 'pod', lease } : null;
+  };
+  const giveTarget = target => {
+    if (target?.type === 'home') giveSlot();
+    else if (target?.type === 'pod') { target.lease.release(); try { globalThis.__vfPcBoostWake?.(); } catch { /* best effort */ } }
   };
   const hit = () => { misses = 0; };
   const miss = () => {
@@ -139,11 +157,12 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
   };
   if (!loadOpaque && typeof opaqueUrl === 'string') loadOpaque = () => import(opaqueUrl);
   if (!loadAlpha && typeof alphaUrl === 'string') loadAlpha = () => import(alphaUrl);
+  if (!loadPod) loadPod = typeof podUrl === 'string' ? () => import(podUrl) : () => import('./pod-hook.mjs');
   for (const [name, fn] of Object.entries({ RU, getStore, mF, Xl, isJobAborted, getConfig, loadOpaque, loadAlpha })) {
     if (typeof fn !== 'function') throw new TypeError(name + ' must be a function');
   }
   if (!jp || typeof jp.get !== 'function') throw new TypeError('jp must be a Map');
-  const stats = { calls: 0, bypassed: 0, alpha: { tried: 0, home: 0, native: 0 }, opaque: { tried: 0, home: 0, native: 0 },
+  const stats = { calls: 0, bypassed: 0, alpha: { tried: 0, home: 0, native: 0 }, opaque: { tried: 0, home: 0, native: 0 }, pod: { tried: 0, home: 0, native: 0 },
     errors: 0, active: 0, reasons: {}, samples: [], last: null };
   const reject = (reason, options) => {
     stats.reasons[reason] = (stats.reasons[reason] || 0) + 1;
@@ -214,17 +233,22 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
       let validNow = false;
       try { validNow = valid(); } catch { validNow = false; }
       if (!validNow) { reject('invalid_' + whyInvalid(ctx), options); return native(options); }
-      if (!takeSlot(ctx.settings)) { reject('home_busy', null); return native(options); }
+      const target = takeTarget(ctx.settings);
+      if (!target) { reject(homeUnready() ? 'home_unready' : 'home_busy', null); return native(options); }
       const watch = leaseSignal([ctx.lease?.signal, ctx.outerSignal, options?.signal], valid), signal = watch.signal;
       if (watch.watchdog) stats.watchdog = (stats.watchdog || 0) + 1;
-      const bucket = stats[kind];
+      const bucket = target.type === 'pod' ? stats.pod : stats[kind];
       bucket.tried++; stats.active++;
       let usedNative = false;
-      const fallback = o => { usedNative = true; miss(); giveSlot(); return native(o); };
+      const fallback = o => { usedNative = true; miss(); giveTarget(target); return native(o); };
       const shared = { ...c, fetchImpl: c.fetchImpl ?? tracedFetch, token: c.getToken(), permitted: valid, nativeReserveRatio: ratioFor(ctx.settings), homeShare: shareFor(ctx.settings), healthTimeoutMs, freshNativeBudget: true };
       try {
         let result;
-        if (kind === 'alpha') {
+        if (target.type === 'pod') {
+          const { createPodHook } = await loadPod();
+          result = await createPodHook(fallback, { lease: target.lease, kind, permitted: valid, nativeReserveRatio: ratioFor(ctx.settings),
+            homeShare: shareFor(ctx.settings) })(options, { duration, signal });
+        } else if (kind === 'alpha') {
           const { createAlphaHook } = await loadAlpha();
           result = await createAlphaHook(fallback, shared)(options, { kind: 'frameshift-alpha-v1', duration, signal });
         } else {
@@ -235,7 +259,7 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
         else { hit(); bucket.home++; stats.last = { kind, jobId: ctx.jobId, at: new Date().toISOString(), path: options.targetPath }; }
         return result;
       } catch (error) { stats.errors++; throw error; }
-      finally { watch.stop(); if (!usedNative) giveSlot(); stats.active--; }
+      finally { watch.stop(); if (!usedNative) giveTarget(target); stats.active--; }
     };
     routed.__vfFrameshiftRoute = true;
     routed.original = original;
@@ -314,29 +338,36 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
       let validNow = false, why = null;
       try { validNow = valid(); } catch { why = 'low_scope_aborted'; }
       if (!validNow) { reject(why || 'low_invalid_' + whyInvalid(ctx), null); return passthrough(); }
-      if (!takeSlot(ctx.settings)) { reject('low_home_busy', null); return passthrough(); }
+      const target = takeTarget(ctx.settings);
+      if (!target) { reject(homeUnready() ? 'home_unready' : 'low_home_busy', null); return passthrough(); }
       const watch = leaseSignal([ctx.lease?.signal, ctx.outerSignal, args.signal], valid), signal = watch.signal;
       if (watch.watchdog) stats.watchdog = (stats.watchdog || 0) + 1;
       stats.low.tried++; stats.active++;
+      if (target.type === 'pod') stats.pod.tried++;
       let usedNative = false, nativeResult;
-      // Release the Home slot before the (long) server render so the next offer can use Home.
-      const fallback = async () => { usedNative = true; miss(); giveSlot(); nativeResult = await passthrough(); return nativeResult; };
+      // Release the Home/pod slot before the (long) server render so the next offer can use it.
+      const fallback = async () => { usedNative = true; miss(); giveTarget(target); nativeResult = await passthrough(); return nativeResult; };
       const shared = { ...c, fetchImpl: c.fetchImpl ?? tracedFetch, token: c.getToken(), permitted: valid, nativeReserveRatio: ratioFor(ctx.settings), homeShare: shareFor(ctx.settings), healthTimeoutMs, freshNativeBudget: true };
       try {
-        if (kind === 'alpha') {
+        if (target.type === 'pod') {
+          const { createPodHook } = await loadPod();
+          await createPodHook(fallback, { lease: target.lease, kind, permitted: valid, nativeReserveRatio: ratioFor(ctx.settings),
+            homeShare: shareFor(ctx.settings) })(options, { duration, signal });
+        } else if (kind === 'alpha') {
           const { createAlphaHook } = await loadAlpha();
           await createAlphaHook(fallback, shared)(options, { kind: 'frameshift-alpha-v1', duration, signal });
         } else {
           const { createMotionHook } = await loadOpaque();
           await createMotionHook(fallback, shared)(options, { signal, duration });
         }
-        if (usedNative) { stats.low.native++; return nativeResult; }
+        if (usedNative) { stats.low.native++; if (target.type === 'pod') stats.pod.native++; return nativeResult; }
         hit();
         stats.low.home++;
+        if (target.type === 'pod') stats.pod.home++;
         stats.last = { kind: 'low-' + kind, jobId: ctx.jobId, at: new Date().toISOString(), path: args.outputPath };
         return { code: 0, timedOut: false, stdout: '', stderr: '' };
       } catch (error) { stats.errors++; throw error; }
-      finally { watch.stop(); if (!usedNative) giveSlot(); stats.active--; }
+      finally { watch.stop(); if (!usedNative) giveTarget(target); stats.active--; }
     };
     wrapped.__vfFrameshiftRoute = true;
     wrapped.original = original;

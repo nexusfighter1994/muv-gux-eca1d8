@@ -105,7 +105,7 @@ def payload(**updates):
 def receipt(request=None, **updates):
     data = request or payload()
     return dict({'version': 1, 'id': data['id'], 'contract': CONTRACT, 'kind': ALPHA,
-                 'format': 'mov', 'backend': 'd3d11/nvidia',
+                 'format': 'mov', 'backend': 'software/cpu',
                  'sha256': hashlib.sha256(b'x').hexdigest(), 'data': 'eA==',
                  'payloadSha256': 'b' * 64,
                  'probe': {'codec': 'prores', 'profile': '4444', 'pixFmt': 'yuva444p12le'}},
@@ -277,11 +277,12 @@ class AlphaTransportTests(unittest.TestCase):
                     make_service(owner).render(data)
                 spawn.assert_not_called()
 
-    def test_shared_lease_charges_once_and_rejects_concurrent_alpha(self):
+    def test_shared_lease_charges_cpu_once_and_rejects_concurrent_alpha(self):
         def active():
-            self.assertEqual(self.worker.busy, {'cpu': 18, 'gpu': 6})
-            # The second graphics slot is free, but the shared six-slot GPU budget is full.
-            with self.assertRaisesRegex(RuntimeError, 'shared GPU unavailable|motion busy'):
+            # CPU render: one CPU lease, the GPU budget is not charged.
+            self.assertEqual(self.worker.busy, {'cpu': 18, 'gpu': 5})
+            # The second graphics slot is free, but the shared CPU budget is full.
+            with self.assertRaisesRegex(RuntimeError, 'shared worker budget unavailable|motion busy'):
                 self.service.render(payload(id='b' * 32))
         with patch.object(transport.subprocess, 'Popen', return_value=process(callback=active)) as spawn:
             self.service.render(payload())
@@ -319,14 +320,21 @@ class AlphaTransportTests(unittest.TestCase):
                 self.service.cancel('d' * 32)
         self.assertTrue(self.service.quarantined)
 
-    def test_cpu_or_gpu_full_never_spawns(self):
-        for busy in ({'cpu': 18, 'gpu': 5}, {'cpu': 17, 'gpu': 6}):
-            self.worker.busy = busy.copy()
-            with patch.object(transport.subprocess, 'Popen') as spawn:
-                with self.assertRaisesRegex(RuntimeError, 'shared GPU unavailable'):
-                    self.service.render(payload())
-                spawn.assert_not_called()
-            self.assertEqual(self.worker.busy, busy)
+    def test_cpu_full_never_spawns(self):
+        busy = {'cpu': 18, 'gpu': 5}
+        self.worker.busy = busy.copy()
+        with patch.object(transport.subprocess, 'Popen') as spawn:
+            with self.assertRaisesRegex(RuntimeError, 'shared worker budget unavailable'):
+                self.service.render(payload())
+            spawn.assert_not_called()
+        self.assertEqual(self.worker.busy, busy)
+
+    def test_full_gpu_budget_does_not_block_cpu_render(self):
+        self.worker.busy = {'cpu': 17, 'gpu': 6}
+        with patch.object(transport.subprocess, 'Popen', return_value=process()) as spawn:
+            self.service.render(payload())
+        self.assertEqual(spawn.call_count, 1)
+        self.assertEqual(self.worker.busy, {'cpu': 17, 'gpu': 6})
 
     def test_owned_delete_fences_late_post_without_any_start(self):
         handler = Handler(path='/motion/' + payload()['id'], command='DELETE')
@@ -371,7 +379,7 @@ class AlphaTransportTests(unittest.TestCase):
                 self.service.render(payload())
         self.assertTrue(self.service.quarantined)
         self.assertTrue(self.service.slot.locked())
-        self.assertEqual(self.worker.busy, {'cpu': 18, 'gpu': 6})
+        self.assertEqual(self.worker.busy, {'cpu': 18, 'gpu': 5})
         directory.cleanup.assert_not_called()
         self.assertIn(directory, vars(self.service).values())
         with self.assertRaisesRegex(RuntimeError, 'motion busy'):
@@ -413,17 +421,17 @@ class AlphaTransportTests(unittest.TestCase):
 
 
 class GraphicsSlotTests(unittest.TestCase):
-    """Up to four graphics jobs may run at once when the GPU budget allows; a fifth waits (503)."""
-    def test_four_parallel_jobs_then_motion_busy(self):
+    """Up to eight graphics jobs may run at once when the worker budget allows; a ninth waits (503)."""
+    def test_eight_parallel_jobs_then_motion_busy(self):
         w = worker()
         w.busy = {'cpu': 0, 'gpu': 0}
         service = make_service(w)
-        self.assertEqual(service.slots, 4)
-        for _ in range(4):
+        self.assertEqual(service.slots, 8)
+        for _ in range(8):
             self.assertTrue(service.slot.acquire(False))
-        self.assertFalse(service.slot.acquire(False), 'fifth graphics job must wait')
+        self.assertFalse(service.slot.acquire(False), 'ninth graphics job must wait')
         self.assertTrue(service.slot.locked())
-        for _ in range(4):
+        for _ in range(8):
             service.slot.release()
         self.assertFalse(service.slot.locked())
         with self.assertRaises(RuntimeError):
@@ -487,7 +495,8 @@ class BootstrapTests(unittest.TestCase):
         graphics.dispatch(handler, Pace(), Pace())
         self.assertIn(ALPHA, json.loads(handler.wfile.getvalue())['kinds'])
         self.assertIs(graphics.motion.slot, graphics.maps.slot)
-        self.assertIs(graphics.motion.acquire_gpu, graphics.maps.acquire_gpu)
+        # Shared gate, separate leases: motion CPU only, maps CPU+GPU (see shared-lease test).
+        self.assertIsNot(graphics.motion.acquire_gpu, graphics.maps.acquire_gpu)
         self.assertEqual(graphics.motion.command[1], str(self.root / 'motion-offload/worker.mjs'))
         self.assertFalse(hasattr(graphics, 'alpha'))
         self.write_runtime({'contract': CONTRACT})
@@ -518,11 +527,17 @@ class BootstrapTests(unittest.TestCase):
 
     def test_alpha_and_maps_use_same_shared_lease_and_health_accounting(self):
         graphics = self.create()
+        # Motion (CPU render) charges the CPU budget only; maps (Vulkan) charge CPU and GPU.
         release = graphics.motion.acquire_gpu()
-        self.assertEqual(self.worker.busy, {'cpu': 18, 'gpu': 6})
+        self.assertEqual(self.worker.busy, {'cpu': 18, 'gpu': 5})
         self.assertEqual(self.worker.health()['graphicsBusy'], 1)
         self.assertIsNone(graphics.maps.acquire_gpu())
         release()
+        release()
+        self.assertEqual(self.worker.busy, {'cpu': 17, 'gpu': 5})
+        release = graphics.maps.acquire_gpu()
+        self.assertEqual(self.worker.busy, {'cpu': 18, 'gpu': 6})
+        self.assertIsNone(graphics.motion.acquire_gpu())
         release()
         self.assertEqual(self.worker.busy, {'cpu': 17, 'gpu': 5})
         self.assertEqual(self.worker.health()['graphicsBusy'], 0)

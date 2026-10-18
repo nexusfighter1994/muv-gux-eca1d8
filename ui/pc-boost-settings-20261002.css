@@ -46,3 +46,9 @@ pc-boost-settings { display: block; min-width: 0; }
   .vf-pc-boost__actions { width: 100%; }
   .vf-pc-boost__actions .vc-btn { flex: 1 1 125px; }
 }
+.vf-pc-boost__explain { margin: 12px 0 4px; max-width: 880px; font-size: 12px; line-height: 1.5; color: var(--vc-text-dim); }
+.vf-pc-boost__explain summary { cursor: pointer; color: var(--vc-text); font-size: 13px; }
+.vf-pc-boost__explain dl { margin: 8px 0 0; display: grid; grid-template-columns: minmax(140px, 200px) minmax(0, 1fr); gap: 6px 16px; }
+.vf-pc-boost__explain dt { color: var(--vc-text); font-weight: 600; }
+.vf-pc-boost__explain dd { margin: 0; }
+@media (max-width: 640px) { .vf-pc-boost__explain dl { grid-template-columns: 1fr; gap: 2px; } .vf-pc-boost__explain dd { margin-bottom: 8px; } }

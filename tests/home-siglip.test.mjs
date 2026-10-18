@@ -50,16 +50,17 @@ test('unknown callbacks and PC-off fallbacks hold normal admission through full 
   const pending=[];
   const runNative=async(job,fn,signal)=>{active++;maxActive=Math.max(maxActive,active);try{return await fn();}finally{active--;}};
   home.attachHomeSiglipRecovery(q,{runNative,runNativeContext:(s,fn)=>storage.run({native:true},fn),isAborted:()=>false});
-  for(let i=0;i<3;i++){
+  // Native recovery permits are capped at createServerPermits maxRunning (6).
+  for(let i=0;i<7;i++){
     const scope={nonce:String(i),jobId:'job'+i,kind:'siglip-embed',candidate:true};scopes.set(scope.nonce,scope);
     let resolve;const done=new Promise(r=>resolve=r);
     const callback=async()=>{assert.ok(storage.getStore().native);await done;return i;};
     pending.push({task:q.runCallback(scope,callback),resolve});
   }
-  await new Promise(r=>setTimeout(r,20));assert.equal(active,2);
+  await new Promise(r=>setTimeout(r,20));assert.equal(active,6);
   pending[0].resolve();assert.equal(await pending[0].task,0);
-  pending[1].resolve();pending[2].resolve();await Promise.all(pending.map(p=>p.task));
-  assert.equal(maxActive,2);assert.equal(active,0);
+  for(const p of pending.slice(1))p.resolve();await Promise.all(pending.map(p=>p.task));
+  assert.equal(maxActive,6);assert.equal(active,0);
 });
 
 test('already aborted callback signal is combined into the Home lease before transport',async()=>{
@@ -87,4 +88,24 @@ test('already aborted callback signal is combined into the Home lease before tra
   assert.equal(captured.signal.aborted,true);
   delete globalThis.__vfHomeSiglipQueue;delete globalThis.__vfHomeSiglipScope;delete globalThis.__vfHomeSiglipAttachSignal;
   delete globalThis.__vfHomeSiglipRecovery;delete globalThis.__vfHomeSiglipBuffers;
+});
+
+test('Home health keeps the last good probe through a lost probe; capacity expires 10 s after it', async () => {
+  const savedFetch = globalThis.fetch;
+  let clock = 1000, fail = false;
+  const ok = {ready: true, device: 'cuda', model_id: 'google/siglip2-base-patch16-384', model_revision: 'f775b65a79762255128c981547af89addcfe0f88',
+    multi_query: true, configured_concurrency: 20, active_tasks: 0};
+  globalThis.fetch = async () => { if (fail) throw Error('timeout'); return {ok: true, json: async () => ok}; };
+  try {
+    let probe;
+    const health = home.startHomeSiglipHealth({readConfig: () => ({enabled: true, siglipEnabled: true, siglipConcurrency: 20}), readToken: () => 't',
+      url: 'http://pc', now: () => clock, schedule: fn => { probe = fn; return {unref() {}}; }});
+    await new Promise(r => setImmediate(r));
+    assert.equal(health.getCapacity(), 20);
+    fail = true; clock += 4000; await probe();
+    assert.equal(health.getCapacity(), 20, 'a lost probe keeps the last good health');
+    assert.equal(health.snapshot().checkedAt, 1000);
+    clock += 7000;
+    assert.equal(health.getCapacity(), 0, 'expired 10 s after the last success');
+  } finally { globalThis.fetch = savedFetch; }
 });

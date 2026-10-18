@@ -5,27 +5,33 @@ def make_adapter(worker, command, contract, config=None):
     config = {} if config is None else config
     if not isinstance(config, dict) or config.get('contract', contract) != contract:
         raise ValueError('motion capability contract')
-    def acquire():
-        with worker.lock:
-            if worker.stopping.is_set() or not worker.ready or not worker.config['enabled']:
-                return None
-            if any(worker.busy[k] >= worker.config[k+'Workers'] for k in ('cpu','gpu')):
-                return None
-            worker.busy['cpu'] += 1
-            worker.busy['gpu'] += 1
-        released = False
-        def release():
-            nonlocal released
+    def lease(kinds):
+        def acquire():
             with worker.lock:
-                if not released:
-                    released = True
-                    worker.busy['cpu'] -= 1
-                    worker.busy['gpu'] -= 1
-        return release
-    return MotionService(command, contract, acquire, kinds=config.get('kinds'),
-                         max_output_bytes=config.get('maxOutputBytes'),
-                         max_response_bytes=config.get('maxResponseBytes'),
-                         transfer_limits=worker.transfer_limits.get)
+                if worker.stopping.is_set() or not worker.ready or not worker.config['enabled']:
+                    return None
+                if any(worker.busy[k] >= worker.config[k+'Workers'] for k in kinds):
+                    return None
+                for k in kinds:
+                    worker.busy[k] += 1
+            released = False
+            def release():
+                nonlocal released
+                with worker.lock:
+                    if not released:
+                        released = True
+                        for k in kinds:
+                            worker.busy[k] -= 1
+            return release
+        return acquire
+    # Motion renders on the CPU (software browser path): one CPU lease, the GPU budget stays
+    # free for NVENC/SigLIP. Maps (Vulkan) keep the CPU+GPU lease (acquire_with_gpu).
+    service = MotionService(command, contract, lease(('cpu',)), kinds=config.get('kinds'),
+                            max_output_bytes=config.get('maxOutputBytes'),
+                            max_response_bytes=config.get('maxResponseBytes'),
+                            transfer_limits=worker.transfer_limits.get)
+    service.acquire_with_gpu = lease(('cpu', 'gpu'))
+    return service
 
 def patch_worker(source):
     source=source.replace('\r\n','\n')

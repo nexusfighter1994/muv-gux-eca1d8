@@ -16,6 +16,21 @@ export const DEFAULT_CONFIG = Object.freeze({
   // render's deadline Home may use before the server renders it itself (fresh full deadline).
   motionSlots: 2,
   motionHomeShare: 70,
+  // SigLIP embeddings the server's own engine runs at once while the PC SigLIP is ready
+  // (node/siglip-native-cap.cjs); the rest waits for the PC. OCR is not affected.
+  siglipServerEmbeds: 1,
+  // Job order: jobs before segment rendering first (script, voiceover, audio, chunk planning),
+  // finish-first from segment rendering on (node/scheduling-settings.cjs).
+  earlyPhasePriority: true,
+  // RunPod burst: while this many frameshift renders wait, start the cheapest GPU pod within
+  // the price cap (cents per hour); stop it again at the lower mark. Off by default.
+  burstEnabled: false,
+  burstStartQueue: 200,
+  burstStopQueue: 10,
+  burstMaxCents: 30,
+  burstMaxHours: 12,
+  // Allowed RunPod GPU type ids ([] = any within the price cap); the strongest available is taken.
+  burstGpuTypes: Object.freeze([]),
 });
 // Settings the PC worker knows; the boost targets above stay on the server.
 export const PC_CONFIG_KEYS = Object.freeze(['enabled', 'cpuWorkers', 'gpuWorkers', 'siglipEnabled', 'siglipConcurrency', 'sceneWorkers']);
@@ -26,10 +41,17 @@ export const CONFIG_BOUNDS = Object.freeze({
   sceneWorkers: Object.freeze({ min: 0, max: 25 }),
   clipvaultBoost: Object.freeze({ min: 0, max: 200 }),
   ffmpegBoost: Object.freeze({ min: 0, max: 64 }),
-  motionSlots: Object.freeze({ min: 1, max: 4 }),
+  motionSlots: Object.freeze({ min: 1, max: 8 }),
   // Above 100 Home may take longer than the server's own render deadline (Home caps at 10 min).
   motionHomeShare: Object.freeze({ min: 50, max: 200 }),
+  siglipServerEmbeds: Object.freeze({ min: 0, max: 25 }),
+  burstStartQueue: Object.freeze({ min: 5, max: 5000 }),
+  burstStopQueue: Object.freeze({ min: 0, max: 1000 }),
+  burstMaxCents: Object.freeze({ min: 5, max: 300 }),
+  burstMaxHours: Object.freeze({ min: 1, max: 24 }),
 });
+// The RunPod API key is write-only: never part of the config, the runtime file or a reply.
+export const BURST_SECRET_PATH = '/data/runtime/runpod-api-key';
 const RUNTIME_PATH = '/data/runtime/pc-boost.json';
 const TOKEN_PATH = '/data/runtime/pc-boost-token';
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
@@ -212,6 +234,9 @@ export function validateConfig(patch, current = DEFAULT_CONFIG) {
     const value = patch[key];
     if (typeof DEFAULT_CONFIG[key] === 'boolean') {
       if (typeof value !== 'boolean') throw invalid(`${key} must be true or false.`);
+    } else if (Array.isArray(DEFAULT_CONFIG[key])) {
+      if (!Array.isArray(value) || value.length > 40 || new Set(value).size !== value.length
+        || !value.every(v => typeof v === 'string' && /^[A-Za-z0-9][A-Za-z0-9 _.()-]{0,79}$/.test(v))) throw invalid(`${key} must be a list of GPU type names.`);
     } else {
       const { min, max } = CONFIG_BOUNDS[key];
       if (!Number.isSafeInteger(value) || value < min || value > max) {
@@ -219,7 +244,9 @@ export function validateConfig(patch, current = DEFAULT_CONFIG) {
       }
     }
   }
-  return Object.fromEntries(Object.keys(DEFAULT_CONFIG).map(key => [key, own(patch, key) ? patch[key] : current[key]]));
+  const next = Object.fromEntries(Object.keys(DEFAULT_CONFIG).map(key => [key, own(patch, key) ? patch[key] : current[key]]));
+  if (next.burstStopQueue >= next.burstStartQueue) throw invalid('burstStopQueue must be lower than burstStartQueue.');
+  return next;
 }
 
 export function publishConfig(runtimePath, config) {
@@ -239,35 +266,65 @@ export function publishConfig(runtimePath, config) {
   }
 }
 
-// Motion keys live in their own row: an older image validating the pc_boost row strictly
-// would otherwise treat unknown keys as corrupt and fall back to defaults (PC Boost off).
+// Motion, burst, server-SigLIP and scheduling keys live in their own rows: an older image validating the pc_boost row
+// strictly would otherwise treat unknown keys as corrupt and fall back to defaults (PC Boost off).
 export const MOTION_CONFIG_KEYS = Object.freeze(['motionSlots', 'motionHomeShare']);
-const pick = (config, keep) => Object.fromEntries(Object.entries(config).filter(([key]) => MOTION_CONFIG_KEYS.includes(key) === keep));
+export const BURST_CONFIG_KEYS = Object.freeze(['burstEnabled', 'burstStartQueue', 'burstStopQueue', 'burstMaxCents', 'burstMaxHours', 'burstGpuTypes']);
+export const SIGLIP_SERVER_KEYS = Object.freeze(['siglipServerEmbeds']);
+export const SCHEDULING_KEYS = Object.freeze(['earlyPhasePriority']);
+const SIDE_ROWS = Object.freeze({ pc_motion: MOTION_CONFIG_KEYS, pc_burst: BURST_CONFIG_KEYS, pc_siglip_server: SIGLIP_SERVER_KEYS,
+  pc_scheduling: SCHEDULING_KEYS });
+const sideKey = key => Object.values(SIDE_ROWS).some(keys => keys.includes(key));
+const only = (config, keys) => Object.fromEntries(Object.entries(config).filter(([key]) => keys.includes(key)));
+const mainPart = config => Object.fromEntries(Object.entries(config).filter(([key]) => !sideKey(key)));
+const API_KEY = /^[A-Za-z0-9_-]{16,256}$/;
+
+function writeSecret(secretPath, value) {
+  fs.mkdirSync(path.dirname(secretPath), { recursive: true, mode: 0o700 });
+  if (value === '') { try { fs.unlinkSync(secretPath); } catch (error) { if (error.code !== 'ENOENT') throw error; } return; }
+  const temporary = `${secretPath}.${process.pid}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temporary, value, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(temporary, secretPath);
+}
 
 export function createConfigStore({ db, runtimePath = RUNTIME_PATH,
-  publish = config => publishConfig(runtimePath, config) }) {
+  publish = config => publishConfig(runtimePath, config), secretPath = BURST_SECRET_PATH }) {
   const select = db.prepare('SELECT value_json FROM app_settings WHERE key = ?');
   const write = db.prepare('INSERT INTO app_settings (key, value_json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json');
   let current = { ...DEFAULT_CONFIG };
   const row = select.get('pc_boost');
   if (row) {
-    try { current = validateConfig(pick(JSON.parse(row.value_json), false)); } catch { /* Corrupt settings fail closed. */ }
+    try { current = validateConfig(mainPart(JSON.parse(row.value_json))); } catch { /* Corrupt settings fail closed. */ }
   }
-  const motion = select.get('pc_motion');
-  if (motion) {
-    try { current = validateConfig(pick(JSON.parse(motion.value_json), true), current); } catch { /* Corrupt motion limits keep defaults. */ }
+  for (const [key, keys] of Object.entries(SIDE_ROWS)) {
+    const side = select.get(key);
+    if (side) {
+      try { current = validateConfig(only(JSON.parse(side.value_json), keys), current); } catch { /* Corrupt side row keeps defaults. */ }
+    }
   }
   const store = config => {
-    write.run('pc_boost', JSON.stringify(pick(config, false)));
-    write.run('pc_motion', JSON.stringify(pick(config, true)));
+    write.run('pc_boost', JSON.stringify(mainPart(config)));
+    for (const [key, keys] of Object.entries(SIDE_ROWS)) write.run(key, JSON.stringify(only(config, keys)));
   };
+  // The burst controller's status (no token, no key) rides along for the /custom card.
+  const burstStatus = () => { try { return globalThis.__vfBurst?.status?.() ?? null; } catch { return null; } };
+  const reportable = () => ({ ...current, burstApiKeySet: fs.existsSync(secretPath), burstStatus: burstStatus() });
   db.transaction(() => {
     store(current);
     publish(current);
   })();
   return {
-    get: () => ({ ...current }),
-    update(patch) {
+    get: reportable,
+    update(input) {
+      let patch = input;
+      if (patch && typeof patch === 'object' && !Array.isArray(patch) && own(patch, 'burstApiKey')) {
+        const { burstApiKey, ...rest } = patch;
+        const key = typeof burstApiKey === 'string' ? burstApiKey.trim() : null;
+        if (key === null || (key !== '' && !API_KEY.test(key))) throw invalid('burstApiKey must be a RunPod API key (or empty to remove it).');
+        validateConfig(rest, current);
+        writeSecret(secretPath, key);
+        patch = rest;
+      }
       const next = validateConfig(patch, current);
       let published = false;
       try {
@@ -281,7 +338,7 @@ export function createConfigStore({ db, runtimePath = RUNTIME_PATH,
         throw error;
       }
       current = next;
-      return { ...current };
+      return reportable();
     },
   };
 }
@@ -332,6 +389,7 @@ function sanitizedHealth(kind, result) {
     graphicsCapacity: result.ok ? count(data.graphicsCapacity ?? data.graphicsSlots) : null,
     completedMap: result.ok ? count(data.completedMap ?? data.MapCompleted) : null,
     completedMotion: result.ok ? count(data.completedMotion ?? data.MotionCompleted) : null,
+    completedAlpha: result.ok ? count(data.completedAlpha) : null,
     // v11: scene detection on the PC (own capacity lane)
     sceneReady: result.ok && data.sceneReady === true,
     sceneCapacity: result.ok ? count(data.sceneCapacity) : null,
@@ -570,13 +628,20 @@ export function installPcBoost({ app, db, requireOwner, runtimePath = RUNTIME_PA
         if (healthyStreak >= 2) publishClipvault(config.clipvaultBoost || 0);
         if (healthyStreak >= 2) publishFfmpeg(config.ffmpegBoost || 0);
       } else {
-        globalThis.__vfHomeCapabilities = { ready: false, checkedAt: Date.now(), capacity: 0 };
         healthyStreak = 0; failedStreak += 1;
-        if (failedStreak >= 3) { extra = 0; publishActive(0); globalThis.__vfPcSceneSlots = 0; publishClipvault(0); publishFfmpeg(0); }
+        // One probe lost to a loaded server's event loop must not stop Home dispatch: the
+        // capabilities fall to "not ready" only after 3 failures in a row (like the boosts).
+        if (failedStreak >= 3) {
+          globalThis.__vfHomeCapabilities = { ready: false, checkedAt: Date.now(), capacity: 0 };
+          extra = 0; publishActive(0); globalThis.__vfPcSceneSlots = 0; publishClipvault(0); publishFfmpeg(0);
+        }
       }
     } catch {
       healthyStreak = 0; failedStreak += 1;
-      if (failedStreak >= 3) { extra = 0; publishActive(0); globalThis.__vfPcSceneSlots = 0; publishClipvault(0); publishFfmpeg(0); }
+      if (failedStreak >= 3) {
+        globalThis.__vfHomeCapabilities = { ready: false, checkedAt: Date.now(), capacity: 0 };
+        extra = 0; publishActive(0); globalThis.__vfPcSceneSlots = 0; publishClipvault(0); publishFfmpeg(0);
+      }
     }
     extra = Math.max(0, Math.min(25, extra));
     if (globalThis.__vfPcBoostFfmpegExtra !== extra) {

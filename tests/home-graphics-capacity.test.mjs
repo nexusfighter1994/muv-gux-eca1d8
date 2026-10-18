@@ -36,7 +36,7 @@ function home({fail = null, delay = 0} = {}) {
     seen.activeDuringRender.push(remote.snapshot().total);
     if (delay) await new Promise((resolve, reject) => { const t = setTimeout(resolve, delay); init.signal?.addEventListener('abort', () => { clearTimeout(t); reject(init.signal.reason); }); });
     if (fail === 'busy') return new Response('{"error":"motion busy"}', {status: 500});
-    return Response.json({version: 1, id: p.id, contract: p.contract, backend: 'd3d11/nvidia', sha256: sha, data: bytes.toString('base64')});
+    return Response.json({version: 1, id: p.id, contract: p.contract, backend: 'software/cpu', sha256: sha, data: bytes.toString('base64')});
   };
   return {seen, fetchImpl};
 }
@@ -100,7 +100,7 @@ test('production config: a finished Home render is kept when receiving it outlas
     if (u.pathname === '/motion/health') return new Response('{}', {status: 200});
     if (init.method === 'DELETE') { deletes++; return Response.json({terminated: true}); }
     const p = JSON.parse(init.body);
-    const receipt = JSON.stringify({version: 1, id: p.id, contract: p.contract, backend: 'd3d11/nvidia', sha256: sha, data: bytes.toString('base64')});
+    const receipt = JSON.stringify({version: 1, id: p.id, contract: p.contract, backend: 'software/cpu', sha256: sha, data: bytes.toString('base64')});
     await new Promise(r => setTimeout(r, 300));
     return new Response(new ReadableStream({start(c) {
       const t = setTimeout(() => { c.enqueue(new TextEncoder().encode(receipt)); c.close(); }, 8500);
@@ -124,7 +124,7 @@ test('a lost Home (cancel unconfirmed) pauses offers for QUARANTINE_MS only, the
     posts++;
     if (lost) throw Error('fetch failed');
     const p = JSON.parse(init.body);
-    return Response.json({version: 1, id: p.id, contract: p.contract, backend: 'd3d11/nvidia', sha256: sha, data: bytes.toString('base64')});
+    return Response.json({version: 1, id: p.id, contract: p.contract, backend: 'software/cpu', sha256: sha, data: bytes.toString('base64')});
   };
   const realNow = Date.now;
   try {
@@ -206,7 +206,7 @@ test('hot bridge: shared provider adopted once; renders already waiting use Home
   assert.equal(seen.payloads.length, 3);
 });
 
-test('probe: while the route reports Home can take one more, ONE extra frameshift render is admitted (cap 4)', () => {
+test('probe: while the route reports Home/pod can take one more, ONE extra frameshift render is admitted (cap 12)', () => {
   const lane = wrapRenderLane(name => ({render: 5, ffmpeg: 14})[name]);
   const cap = wrapFrameshiftCap((e, t, r) => (e === 'render' && r === 'frameshift' ? Math.min(t, 2) : t), () => 2);
   let offer = true;
@@ -217,9 +217,13 @@ test('probe: while the route reports Home can take one more, ONE extra frameshif
     const ends = [remote.begin('frameshift'), remote.begin('frameshift'), remote.begin('frameshift')];
     assert.equal(cap('render', lane('render'), 'frameshift'), 6, '3 remote + probe');
     ends.push(remote.begin('frameshift'));
-    assert.equal(cap('render', lane('render'), 'frameshift'), 6, 'extra capacity never exceeds 4');
+    assert.equal(cap('render', lane('render'), 'frameshift'), 7, '4 remote + probe');
+    for (let i = 0; i < 5; i++) ends.push(remote.begin('frameshift'));
+    assert.equal(cap('render', lane('render'), 'frameshift'), 12, '9 remote + probe');
+    for (let i = 0; i < 4; i++) ends.push(remote.begin('frameshift'));
+    assert.equal(cap('render', lane('render'), 'frameshift'), 14, 'extra capacity never exceeds 12 (Home 8 + pod 4)');
     offer = false;
-    assert.equal(cap('render', lane('render'), 'frameshift'), 6);
+    assert.equal(cap('render', lane('render'), 'frameshift'), 14);
     ends.forEach(end => end());
     assert.equal(cap('render', lane('render'), 'frameshift'), 2, 'no probe while Home cannot take one');
     remote.setOfferable(() => { throw Error('closed'); });

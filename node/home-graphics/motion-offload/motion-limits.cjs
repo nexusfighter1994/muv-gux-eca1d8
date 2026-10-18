@@ -2,7 +2,7 @@
 // Home motion limits as published in the PC Boost runtime file (pc-boost-api motionSlots /
 // motionHomeShare). Invalid or missing values fall back to the previous fixed behaviour.
 const LIMITS = Object.freeze({
-  motionSlots: Object.freeze({ min: 1, max: 4, fallback: 2 }),
+  motionSlots: Object.freeze({ min: 1, max: 8, fallback: 2 }),
   motionHomeShare: Object.freeze({ min: 50, max: 200, fallback: 70 }),
 });
 

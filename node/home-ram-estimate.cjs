@@ -27,4 +27,21 @@ function wrapHomeRamEstimate(original) {
   return wrapped;
 }
 
-module.exports = { wrapHomeRamEstimate, HOME_DISPATCH_MB };
+// Home dispatches cost ~80-160 MB of server RAM and take work OFF the server. They pass the
+// admission gate while real available RAM stays above HOME_FLOOR_MB, even when native slots have
+// already reserved the gate's headroom (native slots are predicted at ~2.4 GB each); below the
+// floor the native gate decides as before.
+const HOME_FLOOR_MB = 4096;
+
+function memAvailableMb(read = () => require('node:fs').readFileSync('/proc/meminfo', 'utf8')) {
+  try { const m = /MemAvailable:\s+(\d+) kB/.exec(read()); return m ? Number(m[1]) / 1024 : 0; } catch { return 0; }
+}
+
+function wrapHomeGate(gate, { available = memAvailableMb, floorMb = HOME_FLOOR_MB } = {}) {
+  if (gate?.__vfHomeGate) return gate;
+  const wrapped = request => (request?.key === 'ffmpegHome' && available() - HOME_DISPATCH_MB >= floorMb ? true : gate(request));
+  wrapped.__vfHomeGate = true;
+  return wrapped;
+}
+
+module.exports = { wrapHomeRamEstimate, wrapHomeGate, memAvailableMb, HOME_DISPATCH_MB, HOME_FLOOR_MB };

@@ -5,7 +5,7 @@ export function customPage(stylesString = '') {
 <link rel="stylesheet" href="/assets/pc-boost-settings-20261002.css?v=mods-20261015a">
 <link rel="stylesheet" href="/assets/pc-transfer-settings-20261011.css?v=mods-20261015a">
 <link rel="stylesheet" href="/assets/vf-custom.css?v=mods-20261015a">
-<script type="module" src="/assets/pc-boost-settings-20261002.js?v=motion-share-20261017b"></script>
+<script type="module" src="/assets/pc-boost-settings-20261002.js?v=motion-cpu-20261017e"></script>
 <script type="module" src="/assets/pc-transfer-settings-20261011.js?v=size-nvenc-20261013a"></script>
 <script type="module" src="/assets/vf-custom-page.js?v=mods-20261015a"></script>
 </head><body class="vfc-body"><main id="vfc-mods" class="vfc-main">

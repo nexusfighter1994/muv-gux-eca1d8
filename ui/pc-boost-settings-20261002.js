@@ -1,6 +1,11 @@
-const FIELD_KEYS = ['enabled', 'cpuWorkers', 'gpuWorkers', 'siglipEnabled', 'siglipConcurrency', 'sceneWorkers', 'clipvaultBoost', 'ffmpegBoost', 'motionSlots', 'motionHomeShare'];
+const FIELD_KEYS = ['enabled', 'cpuWorkers', 'gpuWorkers', 'siglipEnabled', 'siglipConcurrency', 'siglipServerEmbeds', 'earlyPhasePriority', 'sceneWorkers', 'clipvaultBoost', 'ffmpegBoost', 'motionSlots', 'motionHomeShare',
+  'burstEnabled', 'burstStartQueue', 'burstStopQueue', 'burstMaxCents', 'burstMaxHours'];
 // Shown when an older server does not report these yet (its fixed behaviour).
-const FIELD_DEFAULTS = { motionSlots: 2, motionHomeShare: 70 };
+const FIELD_DEFAULTS = { siglipServerEmbeds: 1, earlyPhasePriority: true, motionSlots: 2, motionHomeShare: 70, burstEnabled: false, burstStartQueue: 200, burstStopQueue: 10, burstMaxCents: 30, burstMaxHours: 12 };
+// Write-only: sent only when typed, never filled from the server.
+const SECRET_KEYS = ['burstApiKey'];
+// Checkbox group: burstGpuType boxes -> burstGpuTypes list.
+const LIST_KEYS = { burstGpuTypes: 'burstGpuType' };
 const STATUS_REQUEST_TIMEOUT_MS = 6500;
 
 function currentWorkerHealth(health, kind) {
@@ -45,8 +50,10 @@ class PcBoostSettings extends HTMLElement {
                 <label>CPU workers<input class="vc-input" name="cpuWorkers" type="number" min="0" max="25" step="1" required></label>
                 <label>GPU encoding workers<input class="vc-input" name="gpuWorkers" type="number" min="0" max="25" step="1" required></label>
                 <label>SigLIP concurrency<input class="vc-input" name="siglipConcurrency" type="number" min="1" max="25" step="1" required></label>
+                <label>Server SigLIP while PC ready<input class="vc-input" name="siglipServerEmbeds" type="number" min="0" max="25" step="1" required></label>
                 <label>Scene workers<input class="vc-input" name="sceneWorkers" type="number" min="0" max="25" step="1" required></label>
               </div>
+              <details class="vf-pc-boost__explain" open><summary>What these settings do</summary><dl><dt>PC Boost enabled</dt><dd>Master switch. On: while the home PC is reachable the server hands it FFmpeg jobs, motion graphics, B-roll ranking (SigLIP) and scene detection; whatever the PC cannot take runs on the server as before. Off: everything runs on the server.</dd><dt>SigLIP GPU enabled</dt><dd>B-roll ranking (scores candidate pictures and clips against the script) on the PC graphics card instead of the server CPU. While it is ready the server ranks at most one request itself; OCR always stays on the server.</dd><dt>CPU workers</dt><dd>CPU jobs the PC runs at once: FFmpeg x264 jobs and motion graphics (each running graphic takes one). Rule of thumb: CPU threads minus 4 to 6 (24 threads: 18). Higher = more in parallel, but each job slower and the PC less responsive.</dd><dt>GPU encoding workers</dt><dd>FFmpeg jobs encoded on the graphics card at once (NVENC, QP 14 = visually lossless). Maps take one slot too. Recommended 4 to 6; consumer NVIDIA cards allow only a few encodes at the same time.</dd><dt>SigLIP concurrency</dt><dd>Ranking requests the PC accepts at once. The GPU works through them in batches while the CPU prepares the next pictures. 10 to 20 keeps the GPU busy; more only makes requests wait longer (one that waits over 75 s goes back to the server).</dd><dt>Server SigLIP while PC ready</dt><dd>Rankings the server CPU still does itself while the PC SigLIP is ready (the rest waits for the PC). 1 = server stays free for its other work; 2 to 4 empties the backlog faster but takes CPU from the already busy server. 0 = everything on the PC. When the PC is off the server uses its normal limit. OCR always runs on the server.</dd><dt>Scene workers</dt><dd>Scene-cut detections the PC runs at once (CPU). 0 = off, the server does them.</dd></dl></details>
               <div class="vf-pc-boost__boost">
                 <h3 class="vf-pc-boost__subtitle">Server boost while the PC is connected</h3>
                 <p class="vc-muted vf-pc-boost__hint">Raises these server limits only while the home PC is verified reachable and returns to the normal value as soon as it is not. 0 = off; a value below the normal setting has no effect.</p>
@@ -54,15 +61,37 @@ class PcBoostSettings extends HTMLElement {
                   <label>ClipVault concurrency<input class="vc-input" name="clipvaultBoost" type="number" min="0" max="200" step="1" required></label>
                   <label>FFmpeg concurrency<input class="vc-input" name="ffmpegBoost" type="number" min="0" max="64" step="1" required></label>
                 </div>
+                <details class="vf-pc-boost__explain" open><summary>What these settings do</summary><dl><dt>ClipVault concurrency</dt><dd>While the PC is connected the server runs this many ClipVault (YouTube) downloads at once instead of its normal limit: more B-roll sources in parallel. 0 = off.</dd><dt>FFmpeg concurrency</dt><dd>While the PC is connected the server admits this many FFmpeg jobs at once; many of them run on the PC. Raise it while the PC rows below show free CPU/GPU workers; too high and the server waits for RAM ("Waiting for RAM" in Concurrency).</dd></dl></details>
                 <p class="vf-pc-boost__boost-state" data-boost-state role="status">Boost status unavailable</p>
               </div>
               <div class="vf-pc-boost__boost">
                 <h3 class="vf-pc-boost__subtitle">Home PC motion graphics</h3>
                 <p class="vc-muted vf-pc-boost__hint">Parallel motion graphics the server offers to the home PC, and how much of a graphic's render deadline the PC may use (above 100 % the PC may take longer than the server would; at most 10 minutes per graphic). When the PC takes longer, the server renders that graphic itself with its full deadline. Applies to the next graphic, no restart.</p>
                 <div class="vf-pc-boost__limits">
-                  <label>Parallel motion graphics<input class="vc-input" name="motionSlots" type="number" min="1" max="4" step="1" required></label>
+                  <label>Parallel motion graphics<input class="vc-input" name="motionSlots" type="number" min="1" max="8" step="1" required></label>
                   <label>Home PC time share (%)<input class="vc-input" name="motionHomeShare" type="number" min="50" max="200" step="5" required></label>
                 </div>
+                <details class="vf-pc-boost__explain" open><summary>What these settings do</summary><dl><dt>Parallel motion graphics</dt><dd>Motion graphics the PC renders at once. They run on the PC CPU with the server renderer (same result; measured 2.5 to 4 times faster than the GTX 980 Ti path) and each uses about 3 to 4 CPU threads plus one CPU worker above. Recommended 4 to 6 on 24 threads; the PC accepts at most 8.</dd><dt>Home PC time share (%)</dt><dd>How long the PC may take for one graphic, in % of the server deadline (100 % = same as the server, 200 % = twice as long, at most 10 minutes). If the PC takes longer the server renders that graphic itself with its full deadline, so a video never fails because of the PC. Higher = fewer graphics handed back, but a slow PC can delay them.</dd></dl></details>
+              </div>
+              <div class="vf-pc-boost__boost">
+                <h3 class="vf-pc-boost__subtitle">Job order</h3>
+                <label><input type="checkbox" name="earlyPhasePriority"> Prioritize jobs until segment rendering</label>
+                <details class="vf-pc-boost__explain" open><summary>What this setting does</summary><dl><dt>Prioritize jobs until segment rendering</dt><dd>On: a video's steps before segment rendering (script, voiceover, audio normalizing and cutting, chunk planning) run before other work in every queue, because they are short and hold the whole video; between such videos the one further along goes first. From segment rendering on the usual order applies: the video closest to finished goes first. Off: finish-first for everything, so new videos can wait a long time at "Cutting voiceovers". Applies within a few seconds, no restart.</dd></dl></details>
+              </div>
+              <div class="vf-pc-boost__boost">
+                <h3 class="vf-pc-boost__subtitle">RunPod GPU burst</h3>
+                <p class="vc-muted vf-pc-boost__hint">While at least the start number of motion graphics waits, the server rents the cheapest RunPod GPU pod within the price cap and renders motion graphics there (the server's own renderer, same result). Below the stop number for 5 minutes the pod is terminated. The API key is stored on the server only and never shown again.</p>
+                <label><input type="checkbox" name="burstEnabled"> RunPod burst enabled</label>
+                <div class="vf-pc-boost__limits">
+                  <label>RunPod API key<input class="vc-input" name="burstApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="not set"></label>
+                  <label>Start at queued graphics<input class="vc-input" name="burstStartQueue" type="number" min="5" max="5000" step="1" required></label>
+                  <label>Stop at queued graphics<input class="vc-input" name="burstStopQueue" type="number" min="0" max="1000" step="1" required></label>
+                  <label>Max price (cents per hour)<input class="vc-input" name="burstMaxCents" type="number" min="5" max="300" step="1" required></label>
+                  <label>Max pod hours per day<input class="vc-input" name="burstMaxHours" type="number" min="1" max="24" step="1" required></label>
+                </div>
+                <details class="vf-pc-boost__explain" open><summary>What these settings do</summary><dl><dt>RunPod burst</dt><dd>Optional and off without an API key: rents a cloud GPU only while many motion graphics wait, and stops it again below the stop number. Not needed while the home PC keeps up.</dd><dt>Start / stop at queued graphics</dt><dd>Waiting motion graphics that start the pod, and the number it must stay below for 5 minutes before the pod stops.</dd><dt>Max price / max pod hours</dt><dd>Hard cost limits: only GPUs at or below this hourly price, and at most this many pod hours per day.</dd></dl></details>
+                <fieldset class="vf-pc-boost__gpus" data-burst-gpus><legend>GPU types (none selected = any within the price cap; the strongest available is taken)</legend><p class="vc-muted">Save the API key to load the GPU list.</p></fieldset>
+                <p class="vf-pc-boost__boost-state" data-burst-state role="status">RunPod status unavailable</p>
               </div>
             </fieldset>
             <div class="vf-pc-boost__telemetry" aria-label="PC worker status">
@@ -100,7 +129,8 @@ class PcBoostSettings extends HTMLElement {
         </section>`;
       this.form = this.querySelector('form');
       this.form.addEventListener('input', event => {
-        if (FIELD_KEYS.includes(event.target.name)) this.dirty.add(event.target.name);
+        if (FIELD_KEYS.includes(event.target.name) || SECRET_KEYS.includes(event.target.name)) this.dirty.add(event.target.name);
+        for (const [key, box] of Object.entries(LIST_KEYS)) if (event.target.name === box) this.dirty.add(key);
         this.querySelector('[data-message]').textContent = '';
         this.updateButtons();
       });
@@ -217,15 +247,48 @@ class PcBoostSettings extends HTMLElement {
     for (const key of FIELD_KEYS) {
       if (this.dirty.has(key)) continue;
       const input = this.form.elements.namedItem(key);
-      if (input.type === 'checkbox') input.checked = data.config[key];
+      if (input.type === 'checkbox') input.checked = data.config[key] ?? FIELD_DEFAULTS[key];
       else {
         input.value = data.config[key] ?? FIELD_DEFAULTS[key];
         if (data.bounds?.[key]) { input.min = data.bounds[key].min; input.max = data.bounds[key].max; }
       }
     }
+    const key = this.form.elements.namedItem('burstApiKey');
+    if (key && !this.dirty.has('burstApiKey')) { key.value = ''; key.placeholder = data.config.burstApiKeySet ? 'saved (type to replace)' : 'not set'; }
+    this.renderBurst(data.config.burstStatus);
+    if (!this.dirty.has('burstGpuTypes')) this.renderGpus(data.config.burstStatus?.gpus, data.config.burstGpuTypes ?? [], data.config.burstMaxCents ?? FIELD_DEFAULTS.burstMaxCents);
     this.renderHealth(data.health);
     this.renderBoost(data.boost);
     this.updateButtons();
+  }
+
+  renderGpus(gpus, selected, maxCents) {
+    const box = this.querySelector('[data-burst-gpus]');
+    if (!box) return;
+    const legend = box.querySelector('legend').outerHTML;
+    if (!Array.isArray(gpus) || !gpus.length) { box.innerHTML = legend + '<p class="vc-muted">Save the API key to load the GPU list.</p>'; return; }
+    const known = new Set(gpus.map(g => g.id));
+    const rows = [...gpus, ...selected.filter(id => !known.has(id)).map(id => ({ id, name: id, price: null }))];
+    box.innerHTML = legend;
+    for (const gpu of rows) {
+      const label = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox'; input.name = 'burstGpuType'; input.value = gpu.id; input.checked = selected.includes(gpu.id);
+      const price = Number.isFinite(gpu.price) ? ` · $${gpu.price.toFixed(2)}/h${gpu.price * 100 > maxCents ? ' (above the cap)' : ''}` : ' · not offered now';
+      label.append(input, ` ${gpu.name}${gpu.memoryInGb ? ` · ${gpu.memoryInGb} GB` : ''}${price}`);
+      box.append(label);
+    }
+  }
+
+  renderBurst(status) {
+    const node = this.querySelector('[data-burst-state]');
+    if (!node) return;
+    if (!status) { node.textContent = 'RunPod status unavailable'; return; }
+    const today = status.ledger ? `today ${(status.ledger.seconds / 3600).toFixed(1)} h, $${(status.ledger.cents / 100).toFixed(2)}` : '';
+    const pod = status.pod;
+    const text = pod ? `Pod ${pod.ready ? 'ready' : 'starting'}: ${pod.gpu || 'GPU'} at $${Number(pod.costPerHr).toFixed(2)}/h, ${status.inflight} rendering`
+      : status.lastError ? `No pod (${status.lastError})` : 'No pod running';
+    node.textContent = [text, `${status.queued ?? '?'} graphics queued`, today].filter(Boolean).join(' · ');
   }
 
   renderBoost(boost) {
@@ -292,6 +355,8 @@ class PcBoostSettings extends HTMLElement {
       const patch = {};
       for (const key of this.dirty) {
         const input = this.form.elements.namedItem(key);
+        if (LIST_KEYS[key]) { patch[key] = [...this.form.querySelectorAll(`input[name="${LIST_KEYS[key]}"]:checked`)].map(box => box.value); continue; }
+        if (SECRET_KEYS.includes(key)) { if (input.value.trim()) patch[key] = input.value.trim(); continue; }
         patch[key] = input.type === 'checkbox' ? input.checked : Number(input.value);
       }
       const session = await this.request('/api/me');
@@ -338,7 +403,7 @@ function mountConcurrency() {
     const anchor = [...list.querySelectorAll('.vc-worker-row')].find(row => /FFmpeg/i.test(row.querySelector('strong')?.textContent || ''));
     if (!anchor) continue;
     let previous = anchor;
-    for (const [key, label] of [['queue','Home PC queue'],['cpu', 'Home PC FFmpeg CPU'], ['gpu', 'Home PC FFmpeg GPU'], ['graphics', 'Home PC GPU Maps / Motion'], ['scene', 'Home PC Scenes'], ['siglip', 'Home PC SigLIP GPU']]) {
+    for (const [key, label] of [['queue','Home PC queue'],['cpu', 'Home PC FFmpeg CPU'], ['gpu', 'Home PC FFmpeg GPU'], ['graphics', 'Home PC Motion (CPU) / Maps (GPU)'], ['scene', 'Home PC Scenes'], ['siglip', 'Home PC SigLIP GPU']]) {
       const row = document.createElement('li');
       row.className = 'vc-worker-row vf-homepc-row';
       row.dataset.homepcRow = key;
@@ -365,15 +430,20 @@ function renderConcurrency(data) {
     }
     const worker = currentWorkerHealth(data?.health, key === 'siglip' ? 'siglip' : 'ffmpeg');
     if (key === 'graphics') {
-      row.querySelector('.vc-faint').textContent = Number.isSafeInteger(worker?.graphicsCapacity) && worker.graphicsCapacity >= 1
-        ? `${number(worker.graphicsBusy)}/${worker.graphicsCapacity} busy | ${number(worker.completedMap)} maps | ${number(worker.completedMotion)} motion completed (PC total)`
-        : 'Graphics worker unavailable; server normal';
+      // Busy of the slots the server offers (PC Boost motionSlots), then where motion went since the route started.
+      const motion = data?.homeMotion, slots = Number.isSafeInteger(motion?.slots) ? motion.slots : worker?.graphicsCapacity;
+      const parts = Number.isSafeInteger(worker?.graphicsCapacity) && worker.graphicsCapacity >= 1
+        ? [`${number(worker.graphicsBusy)}/${number(slots)} busy`] : ['Graphics worker unavailable; server normal'];
+      if (motion) parts.push(`recent: ${number((motion.opaqueHome ?? 0) + (motion.alphaHome ?? 0))} on PC, ${number(motion.native)} on server`);
+      if (Number.isSafeInteger(worker?.graphicsCapacity)) parts.push(`${number(worker.completedMotion)} motion${Number.isSafeInteger(worker.completedAlpha) ? ` + ${worker.completedAlpha} overlays` : ''} | ${number(worker.completedMap)} maps completed (PC total)`);
+      row.querySelector('.vc-faint').textContent = parts.join(' | ');
       row.classList.toggle('vc-worker-row--busy', Number(worker?.graphicsBusy) > 0);
       continue;
     }
     if (key === 'gpu' && worker?.ready) row.querySelector('strong').textContent = worker.nvencReady === true ? 'Home PC FFmpeg GPU (NVENC)' : 'Home PC GPU decode';
     let active = key === 'siglip' ? worker?.active : worker?.[`${key}Busy`] ?? worker?.[`${key}Active`];
-    if (['cpu', 'gpu'].includes(key) && Number.isSafeInteger(active)) active = Math.max(0, active - (worker?.graphicsBusy || 0));
+    // Motion graphics hold a CPU lease (CPU render), not a GPU one: only the CPU row excludes them.
+    if (key === 'cpu' && Number.isSafeInteger(active)) active = Math.max(0, active - (worker?.graphicsBusy || 0));
     const capacity = key === 'siglip' ? worker?.acceptedConcurrency : key === 'scene' ? worker?.sceneWorkers ?? worker?.sceneCapacity : worker?.[`${key}Capacity`];
     const completed = key === 'siglip' ? worker?.completed : worker?.[{ cpu: 'completedCpu', gpu: 'completedGpu', scene: 'completedScene' }[key]];
     const enabled = data?.config?.enabled && (key !== 'siglip' || data.config.siglipEnabled);
@@ -386,13 +456,16 @@ function renderConcurrency(data) {
       if (['Disconnected', 'Authentication failed', 'GPU unavailable', 'Not ready'].includes(state)) parts.push('server normal');
     }
     parts.push(Number.isSafeInteger(active) ? `${active}/${number(capacity)} busy` : 'Busy unavailable');
-    if (key === 'siglip' && Number.isSafeInteger(worker?.gpuConcurrency)) parts.push(`GPU max ${Math.min(1, worker.gpuConcurrency)}`);
     if (key === 'scene' && Number.isSafeInteger(worker?.sceneQueued) && worker.sceneQueued > 0) parts.push(`${worker.sceneQueued} queued on PC`);
     parts.push(Number.isSafeInteger(completed) ? `${completed} completed (PC total)` : 'Completed unavailable');
     if (key === 'siglip' && data?.homeSiglipQueue) {
       const queue = data.homeSiglipQueue;
       parts.push(`${number(queue.active)}/${number(queue.capacity)} admitted`,
         `${number(queue.queued)} eligible queued`, `${number(queue.recovering)} native recoveries`);
+    }
+    // While the PC is ready the server runs at most one embedding itself; the rest waits for the PC.
+    if (key === 'siglip' && data?.siglipServer) {
+      parts.push(`server ${number(data.siglipServer.embeds)}/${number(data.siglipServer.max)} embeddings`, `${number(data.siglipServer.waitingForPc)} waiting for PC`);
     }
     row.querySelector('.vc-faint').textContent = parts.join(' | ');
     row.classList.toggle('vc-worker-row--busy', Number.isSafeInteger(active) && active > 0);

@@ -12,7 +12,7 @@ export const QUARANTINE_MS=5*60*1000;
 const uncertainHome={until:new Map(),
   has(key){const t=this.until.get(key);if(t==null)return false;if(Date.now()>=t){this.until.delete(key);return false;}return true;},
   add(key){this.until.set(key,Date.now()+QUARANTINE_MS);}};
-export function createMotionHook(nativeRender,{endpoint,token,contract,permitted,ffprobe,ffmpeg,timeoutMs=600000,fetchImpl=fetch,requiredBackend='d3d11/nvidia',nativeReserveMs=0,nativeReserveRatio=0,healthTimeoutMs=null,remoteResource='frameshift',freshNativeBudget=false,homeShare=null}){
+export function createMotionHook(nativeRender,{endpoint,token,contract,permitted,ffprobe,ffmpeg,timeoutMs=600000,fetchImpl=fetch,requiredBackend='software/cpu',nativeReserveMs=0,nativeReserveRatio=0,healthTimeoutMs=null,remoteResource='frameshift',freshNativeBudget=false,homeShare=null}){
   const base=new URL(endpoint);if(base.protocol!=='http:'||base.username||base.password||base.pathname!=='/'||base.search||base.hash||!(['127.0.0.1','localhost','[::1]'].includes(base.hostname)||(base.hostname==='10.0.3.1'&&base.port==='18191')))throw Error('private tunnel required');
   const homeKey=base.origin+'|'+contract;
   return async function(options,{signal,duration}={}){

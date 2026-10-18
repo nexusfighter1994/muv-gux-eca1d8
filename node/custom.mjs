@@ -26,6 +26,7 @@ import finalHash from './final-hash.cjs';
 import renderMemoryFairness from './render-memory-fairness.cjs';
 import schedulerHotpath from './scheduler-hotpath.cjs';
 import homeRemote from './home-graphics/remote-active.cjs';
+import runpodBurst from './runpod/burst-controller.cjs';
 import jobPriority from './job-priority.cjs';
 import fflowResubmit from './fflow-resubmit.cjs';
 import brollReuse from './broll-reuse.cjs';
@@ -92,7 +93,13 @@ export function installFrameshiftRoute(native) {
   const route = frameshiftRoute.createFrameshiftRoute({ ...native, getConfig: getMotionConfiguration, setOfferable: homeRemote.setOfferable,
     loadOpaque: () => import('./home-graphics/motion-offload/hook.mjs'),
     loadAlpha: () => import('./home-graphics/motion-offload/alpha-hook.mjs') });
+  installRunpodBurst();
   return (globalThis.__vfFrameshiftRoute = route);
+}
+// RunPod GPU burst (PC Boost settings burst*): rents one pod while many frameshift renders wait.
+export function installRunpodBurst() {
+  if (globalThis.__vfBurst) return globalThis.__vfBurst;
+  return (globalThis.__vfBurst = runpodBurst.createDefaultBurst({ here: path.join(HERE, 'runpod') }).start());
 }
 // Finish-first: the further a running video is, the higher its native priority (same switch as finish-first RAM fairness).
 export function installJobPriority(native) {

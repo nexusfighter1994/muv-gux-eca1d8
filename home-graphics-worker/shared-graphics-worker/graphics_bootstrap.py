@@ -44,27 +44,31 @@ class Graphics:
         self.maps.transfer_limits = self.motion.transfer_limits
         self.counts, self.lock = {'completedMap': 0, 'completedMotion': 0, 'completedAlpha': 0}, threading.Lock()
         self.active = 0
-        native_acquire = self.motion.acquire_gpu
-        def acquire():
-            with worker.lock:
-                release = native_acquire()
-                if not callable(release): return None
-                self.active += 1
-            released = False
-            def tracked_release():
-                nonlocal released
+        def tracked(native_acquire):
+            def acquire():
                 with worker.lock:
-                    if not released:
-                        release()
-                        self.active -= 1
-                        released = True
-            return tracked_release
-        self.maps.acquire_gpu = self.motion.acquire_gpu = acquire
+                    release = native_acquire()
+                    if not callable(release): return None
+                    self.active += 1
+                released = False
+                def tracked_release():
+                    nonlocal released
+                    with worker.lock:
+                        if not released:
+                            release()
+                            self.active -= 1
+                            released = True
+                return tracked_release
+            return acquire
+        # Motion: CPU lease (software render); maps: CPU+GPU lease. Both share the graphics gate.
+        cpu_acquire = self.motion.acquire_gpu
+        self.maps.acquire_gpu = tracked(getattr(self.motion, 'acquire_with_gpu', cpu_acquire))
+        self.motion.acquire_gpu = tracked(cpu_acquire)
         for service, counter in [(self.maps, 'completedMap'), (self.motion, 'completedMotion')]:
             original = service.render
             def counted(data, original=original, counter=counter):
                 result = original(data)
-                if result.get('backend') in ('Vulkan GPU', 'd3d11/nvidia') and result.get('sha256') and result.get('data'):
+                if result.get('backend') in ('Vulkan GPU', 'd3d11/nvidia', 'software/cpu') and result.get('sha256') and result.get('data'):
                     completed = 'completedAlpha' if counter == 'completedMotion' and data.get('kind') == transport.ALPHA_KIND else counter
                     with self.lock: self.counts[completed] += 1
                 return result

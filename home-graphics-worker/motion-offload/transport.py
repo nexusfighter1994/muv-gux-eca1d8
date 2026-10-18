@@ -5,10 +5,12 @@ MAX_ARTIFACT = 32 * 1024 * 1024
 MAX_OUTPUT = 128 * 1024 * 1024
 MAX_RESPONSE = 176 * 1024 * 1024
 ALPHA_KIND = 'frameshift-alpha-v1'
+# Motion renders on the PC's CPU (alpha-worker.mjs RENDER_BACKEND).
+RENDER_BACKEND = 'software/cpu'
 # Upper bound of parallel graphics jobs on the PC (motion and maps share this gate; each
-# also takes a GPU lease from the existing six-slot budget). The server decides how many
-# it actually offers (PC Boost setting motionSlots, 1..4).
-GRAPHICS_SLOTS = 4
+# also takes a lease from the existing worker budget). The server decides how many it
+# actually offers (PC Boost setting motionSlots, 1..8).
+GRAPHICS_SLOTS = 8
 
 
 class GraphicsGate:
@@ -122,7 +124,7 @@ class MotionService:
         if alpha:
             if (result.get('version') != 1 or result.get('id') != data['id']
                     or result.get('contract') != self.contract or kind != ALPHA_KIND
-                    or result.get('format') != 'mov' or result.get('backend') != 'd3d11/nvidia'
+                    or result.get('format') != 'mov' or result.get('backend') != RENDER_BACKEND
                     or probe.get('codec') != 'prores' or probe.get('profile') != '4444'
                     or probe.get('pixFmt') not in ('yuva444p10le', 'yuva444p12le')):
                 raise ValueError('alpha output protocol/codec')
@@ -180,10 +182,10 @@ class MotionService:
         release = None
         directory = None
         try:
-            # Mandatory lease from the EXISTING six-slot budget; never add six more.
+            # Mandatory lease from the EXISTING worker budget; never add a parallel one.
             release = self.acquire_gpu()
             if not callable(release):
-                raise RuntimeError('shared GPU unavailable')
+                raise RuntimeError('shared worker budget unavailable')
             directory = tempfile.TemporaryDirectory(prefix='vfmo-job-')
             environment = dict(os.environ, VF_MOTION_JOB_ROOT=directory.name)
             with self.lock:

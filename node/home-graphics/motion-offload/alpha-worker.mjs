@@ -4,7 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import cp from 'node:child_process';
 import {promisify} from 'node:util';
-import {syncBuiltinESMExports, createRequire} from 'node:module';
+import {syncBuiltinESMExports} from 'node:module';
 import {pathToFileURL, fileURLToPath} from 'node:url';
 
 export const KIND = 'frameshift-alpha-v1';
@@ -137,6 +137,33 @@ export async function verify(file, p, ffprobe = 'ffprobe', ffmpeg = 'ffmpeg', si
     fps: 24, timeBase: v.time_base, frames, duration: Number(v.duration), alpha};
 }
 
+// Home renders on the CPU, the browser's software path that the server's own native renders
+// use: on the GTX 980 Ti the hardware path measured 2.5-4x slower (same frames, SSIM 0.99).
+export const RENDER_BACKEND = 'software/cpu';
+export const RENDER_ENV = Object.freeze({PRODUCER_BROWSER_GPU_MODE: 'software', PRODUCER_DISABLE_GPU: 'true'});
+
+// Every render summary must record the software browser mode.
+export async function softwareBackend(dir) {
+  const modes = [];
+  const scan = async current => {
+    for (const e of await fs.readdir(current, {withFileTypes: true})) {
+      const file = path.join(current, e.name);
+      if (e.isDirectory()) await scan(file);
+      else if (e.name === 'perf-summary.json') {
+        if ((await fs.stat(file)).size > 1024 * 1024) throw Error('render proof size');
+        modes.push(JSON.parse(await fs.readFile(file, 'utf8'))?.observability?.capture?.browserGpuMode);
+      }
+    }
+  };
+  try { await scan(dir); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    throw Error('render proof missing');
+  }
+  if (!modes.length || modes.some(mode => mode !== 'software')) throw Error('render proof missing');
+  return RENDER_BACKEND;
+}
+
 export async function renderPinned(options, config) {
   const required = ['renderModule', 'cli', 'browser', 'ffmpeg', 'ffprobe'];
   if (!config.files || required.some(k => typeof config[k] !== 'string'
@@ -144,7 +171,7 @@ export async function renderPinned(options, config) {
   for (const [file, expected] of Object.entries(config.files)) {
     if (!/^[a-f0-9]{64}$/.test(expected) || hash(await fs.readFile(file)) !== expected) throw Error('runtime changed');
   }
-  const environment = {PRODUCER_BROWSER_GPU_MODE: 'hardware', PRODUCER_DISABLE_GPU: 'false',
+  const environment = {...RENDER_ENV,
     PRODUCER_HEADLESS_SHELL_PATH: config.browser, HYPERFRAMES_TELEMETRY_DISABLED: '1',
     HYPERFRAMES_SKIP_SKILLS: '1', CI: '1', TEMP: options.workDir, TMP: options.workDir,
     HOME: options.workDir, USERPROFILE: options.workDir,
@@ -175,77 +202,7 @@ export async function renderPinned(options, config) {
   }
 }
 
-// Same classification as the renderer's own classifyGpuRenderer (backend/vendor).
-export function classifyRenderer(renderer) {
-  if (typeof renderer !== 'string' || !renderer) return null;
-  const r = renderer.toLowerCase();
-  const backend = r.includes('swiftshader') ? 'swiftshader' : r.includes('direct3d11') || r.includes('d3d11') ? 'd3d11' : 'other';
-  return backend + '/' + (r.includes('nvidia') ? 'nvidia' : 'other');
-}
-
-// The renderer's hardware launch flags on Windows (getBrowserGpuArgs "hardware"/win32).
-export const HARDWARE_GPU_ARGS = ['--no-sandbox', '--enable-webgl', '--ignore-gpu-blocklist',
-  '--use-gl=angle', '--use-angle=d3d11', '--enable-gpu-rasterization'];
-
-// WebGL renderer of the PINNED browser launched with the renderer's hardware flags.
-export async function probeHardwareGpu(config, workDir) {
-  const puppeteer = createRequire(config.renderModule)('puppeteer-core');
-  const profile = await fs.mkdtemp(path.join(workDir, 'gpu-probe-'));
-  const browser = await puppeteer.launch({executablePath: config.browser, headless: 'shell', userDataDir: profile,
-    args: HARDWARE_GPU_ARGS, timeout: 30000});
-  try {
-    const page = await browser.newPage();
-    return classifyRenderer(await page.evaluate(() => {
-      const gl = document.createElement('canvas').getContext('webgl');
-      const ext = gl?.getExtension('WEBGL_debug_renderer_info');
-      return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : null;
-    }));
-  } finally {
-    await browser.close().catch(() => {});
-  }
-}
-
-// The renderer runs its WebGL probe only on the drawElement path. Parallel capture
-// (workers > 1, clampReason "parallel") and compositions the drawElement compile gate
-// rejects (e.g. compileGate "mix_blend_mode") capture by screenshot without it, so those
-// perf summaries carry no gpuRenderer. Screenshot frames match the server's capture; the
-// backend is then proven by probing the same pinned browser.
-const unprobedScreenshot = d => d && d.gpuRenderer === undefined && d.mode === 'screenshot'
-  && (d.clampReason === 'parallel' || (typeof d.compileGate === 'string' && d.compileGate !== ''));
-
-export async function proveBackend(perfs, probe) {
-  if (!perfs.length) throw Error('hardware proof missing');
-  let unprobed = false;
-  for (const d of perfs) {
-    if (d?.gpuRenderer === 'd3d11/nvidia') continue;
-    if (unprobedScreenshot(d)) { unprobed = true; continue; }
-    throw Error('hardware proof missing');
-  }
-  if (unprobed && await probe().catch(() => null) !== 'd3d11/nvidia') throw Error('hardware proof missing');
-  return 'd3d11/nvidia';
-}
-
-async function hardwareBackend(root, probe) {
-  const perfs = [];
-  const scan = async dir => {
-    for (const e of await fs.readdir(dir, {withFileTypes: true})) {
-      const file = path.join(dir, e.name);
-      if (e.isDirectory()) await scan(file);
-      else if (e.name === 'perf-summary.json') {
-        if ((await fs.stat(file)).size > 1024 * 1024) throw Error('hardware proof size');
-        perfs.push(JSON.parse(await fs.readFile(file, 'utf8')).drawElement);
-      }
-    }
-  };
-  try { await scan(path.join(root, '.debug')); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    throw Error('hardware proof missing');
-  }
-  return proveBackend(perfs, probe);
-}
-
-export async function execute(p, config, {renderNative = renderPinned, probeGpu = probeHardwareGpu} = {}) {
+export async function execute(p, config, {renderNative = renderPinned} = {}) {
   validate(p, config.contract);
   const root = await fs.mkdtemp(path.join(config.jobRoot ?? process.env.VF_MOTION_JOB_ROOT ?? os.tmpdir(), 'vf-alpha-'));
   const controller = new AbortController();
@@ -263,7 +220,7 @@ export async function execute(p, config, {renderNative = renderPinned, probeGpu 
       targetPath: output, workDir: root, timeoutMs: p.timeoutMs, signal: controller.signal}, config);
     controller.signal.throwIfAborted();
     const probe = await verify(output, p, config.ffprobe, config.ffmpeg, controller.signal);
-    const backend = await hardwareBackend(root, () => probeGpu(config, root));
+    const backend = await softwareBackend(path.join(root, '.debug'));
     const bytes = await fs.readFile(output);
     if (bytes.length > MAX_OUTPUT) throw Error('artifact size');
     const result = {version: 1, id: p.id, contract: p.contract, kind: KIND, format: 'mov', backend,

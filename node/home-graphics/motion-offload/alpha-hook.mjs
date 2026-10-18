@@ -55,13 +55,13 @@ async function readJson(response, maximum, signal) {
 export const HOME_LIMIT_MS = 600000, RECEIVE_MIN_MS = 120000, HOME_SHARE_MIN = 0.5, HOME_SHARE_MAX = 2;
 
 export function createAlphaHook(nativeRender, {endpoint, token, contract, permitted, ffprobe, ffmpeg,
-  timeoutMs = 600000, fetchImpl = fetch, requiredBackend = 'd3d11/nvidia',
+  timeoutMs = 600000, fetchImpl = fetch, requiredBackend = 'software/cpu',
   nativeReserveMs = 0, nativeReserveRatio = 0, healthTimeoutMs = null, freshNativeBudget = false, homeShare = null}) {
   const base = new URL(endpoint);
   if (base.protocol !== 'http:' || base.username || base.password || base.pathname !== '/' || base.search || base.hash
     || !(['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname)
       || (base.hostname === '10.0.3.1' && base.port === '18191'))) throw Error('private tunnel required');
-  if (requiredBackend !== 'd3d11/nvidia' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000
+  if (requiredBackend !== 'software/cpu' || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000
     || typeof contract !== 'string' || !contract) throw Error('alpha hook contract');
   const homeKey = base.origin + '|' + contract;
   return async function(options, {kind, duration, signal: outerSignal} = {}) {

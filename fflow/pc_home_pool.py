@@ -28,7 +28,9 @@ def control_ceiling(control,now_ms):
     if not isinstance(control,dict):return 0
     extra=control.get('extra');updated=control.get('updatedAt')
     if type(extra) is not int or type(updated) not in (int,float):return 0
-    if not 0<=now_ms-updated<15000:return 0
+    # 60 s: the server writes this file from its event loop, which can stall for 20 s under load;
+    # a 15 s limit made the pool retire every worker during such a stall.
+    if not 0<=now_ms-updated<60000:return 0
     return max(0,min(50,extra))
 
 
@@ -140,7 +142,10 @@ async def manage():
             tmp.replace(file)
             await asyncio.sleep(2)
             continue
-        active=len((set(children)&owners)-intentional_stops)
+        busy=set(children)&owners
+        # Retiring workers that still encode are real load: a short lull (e.g. a tunnel reconnect)
+        # must not shrink the pool below its work and starve Home admission (readyWorkers).
+        active=len(busy)
         target=policy.update(ceiling,active,time.monotonic())
         if time.monotonic()>=next_start:
             for _ in range(children_to_start(list(children),target,intentional_stops,ceiling)):
@@ -151,7 +156,10 @@ async def manage():
                                            stdout=log,stderr=log)
                 finally:log.close()
                 children[child.pid]=child
-        for pid in children_to_retire(list(children),target,owners,intentional_stops):
+        # The elastic shrink retires idle workers only; busy ones go only when the ceiling itself
+        # (PC offline / lower capacity) is below them.
+        keep=max(target,min(ceiling,len(busy-intentional_stops)))
+        for pid in children_to_retire(list(children),keep,owners,intentional_stops):
             child=children[pid]
             # Home's handler stops new claims, not heartbeats or active encodes.
             # Process exit acknowledges retirement; never signal FFmpeg or a group.

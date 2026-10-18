@@ -33,7 +33,7 @@ test('motion settings are bounded (slots 1..4, Home share 50..200 %) and default
   assert.equal(api.DEFAULT_CONFIG.motionHomeShare, 70);
   assert.equal(api.validateConfig({ motionSlots: 4, motionHomeShare: 90 }).motionSlots, 4);
   assert.equal(api.validateConfig({ motionHomeShare: 200 }).motionHomeShare, 200);
-  for (const patch of [{ motionSlots: 0 }, { motionSlots: 5 }, { motionSlots: 2.5 }, { motionHomeShare: 49 }, { motionHomeShare: 201 }, { motionHomeShare: '80' }]) {
+  for (const patch of [{ motionSlots: 0 }, { motionSlots: 9 }, { motionSlots: 2.5 }, { motionHomeShare: 49 }, { motionHomeShare: 201 }, { motionHomeShare: '80' }]) {
     assert.throws(() => api.validateConfig(patch), error => error.status === 400, JSON.stringify(patch));
   }
   assert.ok(!api.PC_CONFIG_KEYS.includes('motionSlots') && !api.PC_CONFIG_KEYS.includes('motionHomeShare'), 'server-side only, never pushed to Home');
@@ -69,7 +69,8 @@ test('a legacy pc_boost row (written before this change) loads with motion defau
 
 test('motionLimits reads the published runtime file values with safe fallbacks', () => {
   assert.deepEqual(motionLimits({ motionSlots: 4, motionHomeShare: 90 }), { motionSlots: 4, motionHomeShare: 90 });
-  assert.deepEqual(motionLimits({ motionSlots: 7, motionHomeShare: 20 }), { motionSlots: 2, motionHomeShare: 70 });
+  assert.deepEqual(motionLimits({ motionSlots: 8, motionHomeShare: 200 }), { motionSlots: 8, motionHomeShare: 200 });
+  assert.deepEqual(motionLimits({ motionSlots: 9, motionHomeShare: 20 }), { motionSlots: 2, motionHomeShare: 70 });
   assert.deepEqual(motionLimits({ motionSlots: 1, motionHomeShare: 150 }), { motionSlots: 1, motionHomeShare: 150 });
   assert.equal(motionLimits({ motionHomeShare: 201 }).motionHomeShare, 70);
   assert.deepEqual(motionLimits(null), { motionSlots: 2, motionHomeShare: 70 });
@@ -87,4 +88,51 @@ test('motion configuration getSettings exposes the live limits from pc-boost.jso
   assert.deepEqual(configured.getSettings(), { homeMotion: true, motionSlots: 4, motionHomeShare: 90 });
   state = { enabled: false };
   assert.deepEqual(configured.getSettings(), { homeMotion: false, motionSlots: 2, motionHomeShare: 70 });
+});
+
+test('burst settings: own pc_burst row, bounds, stop below start, write-only API key', async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vf-burst-'));
+  const secretPath = path.join(dir, 'runpod-api-key');
+  try {
+    const db = database();
+    const published = [];
+    const store = api.createConfigStore({ db, publish: c => published.push(c), secretPath });
+    assert.equal(store.get().burstEnabled, false);
+    assert.equal(store.get().burstApiKeySet, false);
+    const next = store.update({ burstEnabled: true, burstStartQueue: 150, burstMaxCents: 30, burstApiKey: 'rpa_ABCDEFGHIJKLMNOPQRSTUV0123' });
+    assert.equal(next.burstEnabled, true);
+    assert.equal(next.burstApiKeySet, true);
+    assert.ok(!('burstApiKey' in next), 'the key is never returned');
+    assert.equal(fs.readFileSync(secretPath, 'utf8'), 'rpa_ABCDEFGHIJKLMNOPQRSTUV0123');
+    assert.ok(!JSON.stringify(published).includes('rpa_'), 'the key never reaches the runtime file');
+    assert.deepEqual(row(db, 'pc_burst'), { burstEnabled: true, burstStartQueue: 150, burstStopQueue: 10, burstMaxCents: 30, burstMaxHours: 12, burstGpuTypes: [] });
+    assert.deepEqual(store.update({ burstGpuTypes: ['NVIDIA RTX A4000', 'NVIDIA GeForce RTX 3090'] }).burstGpuTypes, ['NVIDIA RTX A4000', 'NVIDIA GeForce RTX 3090']);
+    for (const bad of [['a', 'a'], [5], ['x;rm'], 'NVIDIA']) assert.throws(() => store.update({ burstGpuTypes: bad }), error => error.status === 400, JSON.stringify(bad));
+    assert.ok(!('burstEnabled' in row(db, 'pc_boost')), 'pc_boost row keeps the old shape');
+    assert.ok(!JSON.stringify(db.prepare('SELECT value_json FROM app_settings').all()).includes('rpa_'), 'the key is not in the database');
+    for (const patch of [{ burstStopQueue: 150 }, { burstMaxCents: 4 }, { burstMaxHours: 25 }, { burstApiKey: 'short' }, { burstApiKey: 7 }, { burstApiKey: 'has spaces in it padding' }]) {
+      assert.throws(() => store.update(patch), error => error.status === 400, JSON.stringify(patch));
+    }
+    assert.equal(fs.readFileSync(secretPath, 'utf8'), 'rpa_ABCDEFGHIJKLMNOPQRSTUV0123', 'a rejected patch keeps the key');
+    assert.equal(store.update({ burstApiKey: '' }).burstApiKeySet, false, 'empty removes the key');
+    assert.equal(api.createConfigStore({ db, publish() {}, secretPath }).get().burstStartQueue, 150, 'reopened from pc_burst');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('siglipServerEmbeds: 0..25, default 1, own settings row', () => {
+  assert.equal(api.DEFAULT_CONFIG.siglipServerEmbeds, 1);
+  assert.equal(api.validateConfig({ siglipServerEmbeds: 0 }).siglipServerEmbeds, 0);
+  assert.equal(api.validateConfig({ siglipServerEmbeds: 25 }).siglipServerEmbeds, 25);
+  for (const value of [-1, 26, 2.5, '3']) assert.throws(() => api.validateConfig({ siglipServerEmbeds: value }));
+  assert.deepEqual(api.SIGLIP_SERVER_KEYS, ['siglipServerEmbeds']);
+  assert.ok(!api.PC_CONFIG_KEYS.includes('siglipServerEmbeds'), 'never pushed to the PC');
+});
+
+test('earlyPhasePriority: boolean, default on, own settings row', () => {
+  assert.equal(api.DEFAULT_CONFIG.earlyPhasePriority, true);
+  assert.equal(api.validateConfig({ earlyPhasePriority: false }).earlyPhasePriority, false);
+  for (const value of [1, 'true', null]) assert.throws(() => api.validateConfig({ earlyPhasePriority: value }));
+  assert.deepEqual(api.SCHEDULING_KEYS, ['earlyPhasePriority']);
+  assert.ok(!api.PC_CONFIG_KEYS.includes('earlyPhasePriority'));
 });

@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import homeRam from './home-ram-estimate.cjs';
+import homePoolClaim from './home-pool-claim.cjs';
+import homeDispatch from './home-dispatch-limit.cjs';
 
 export function withoutHomeFfmpegLane(getContext,runContext,fn){
   const context=getContext();
@@ -127,20 +129,15 @@ export function installHomeAdmission({scheduler,getState,getContext,claim,getAdm
   const requestedCapacity=()=>{
     if(globalThis.__vfHomeQueueEnabled===false)return 0;
     const health=globalThis.__vfHomeCapabilities;
-    if(!health?.ready||Date.now()-health.checkedAt>15000)return 0;
-    return health.capacity||0;
+    // 45 s: a loaded server's event loop can delay the 3 s Home probe well past 15 s.
+    if(!health?.ready||Date.now()-health.checkedAt>45000)return 0;
+    return homeDispatch.dispatchCapacity(health,homeDispatch.readLimit());
   };
-  const fflowCapacity=()=>{
-    try{
-      const pool=getPoolState?getPoolState():JSON.parse(fs.readFileSync('/data/runtime/pc-home-pool.json','utf8'));
-      return pool.mode==='home-only'&&pool.ready&&Date.now()-pool.checkedAt<15000
-        ?Math.min(requestedCapacity(),pool.readyWorkers||0):0;
-    }catch{return 0;}
-  };
+  // FFlow-routed claims run ahead of the pool's ready workers (home-pool-claim.cjs).
   const queue=createHomeQueue({getState,getCapacity:requestedCapacity,
-    canClaim:(w,scopes)=>w.homeKind==='video-normalize'
-      ||scopes.filter(s=>s.kind!=='video-normalize').length<fflowCapacity(),
-    memoryGate:request=>scheduler.getMemoryGate()(request),isAborted:id=>scheduler.isJobAborted(id),
+    canClaim:homePoolClaim.makeCanClaim({getCapacity:requestedCapacity,
+      ...(getPoolState?{readPool:()=>{try{return getPoolState();}catch{return null;}}}:{})}),
+    memoryGate:homeRam.wrapHomeGate(request=>scheduler.getMemoryGate()(request)),isAborted:id=>scheduler.isJobAborted(id),
     claim:(w,scope)=>{
       const resolve=w.resolve;
       w.resolve=lease=>resolve({...lease,homeScope:scope});

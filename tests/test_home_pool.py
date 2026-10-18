@@ -97,7 +97,8 @@ class HomePoolTests(unittest.TestCase):
     def test_stale_or_invalid_control_fails_closed_without_altering_native_limits(self):
         ceiling=self.load()['control_ceiling']
         self.assertEqual(ceiling({'extra':24,'updatedAt':1000},1001),24)
-        self.assertEqual(ceiling({'extra':24,'updatedAt':1000},16000),0)
+        self.assertEqual(ceiling({'extra':24,'updatedAt':1000},16000),24,'a 15 s server stall keeps the pool')
+        self.assertEqual(ceiling({'extra':24,'updatedAt':1000},61000),0)
         self.assertEqual(ceiling({'extra':24,'updatedAt':1001},1000),0)
         for value in (None,[],{}, {'extra':'24','updatedAt':1000},
                       {'extra':True,'updatedAt':1000},{'extra':24,'updatedAt':float('nan')}):
@@ -207,6 +208,25 @@ class HomePoolManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshots[4]['readyWorkers'],2)
         self.assertEqual(snapshots[6]['readyWorkers'],0)
         self.assertEqual(signals,[(pid,signal.SIGTERM) for pid in range(5000,5004)])
+
+    async def test_lull_never_retires_busy_workers_and_retiring_encoders_still_count_as_load(self):
+        snapshots,signals=await self.run_manager([
+            {'now':1,'owners':{5000,5001}},
+            {'now':2,'owners':{5000,5001,5002,5003}},
+            {'now':3,'owners':{5000,5001,5002,5003}},
+            {'now':4,'owners':{5000}},
+            {'now':40,'owners':{5000,5004}},
+            {'now':41,'owners':{5000,5004}},
+            {'now':42,'ceiling':1,'owners':{5000,5004}},
+            {'now':43,'ceiling':0,'stop':True,'exited':range(5000,5006)},
+        ])
+        self.assertEqual([s['target'] for s in snapshots[:5]],[2,4,6,6,6])
+        # After the 30 s lull the target falls to the peak seen (4), but the busy 5000/5004 stay.
+        self.assertEqual(snapshots[5]['target'],4)
+        self.assertNotIn(5000,snapshots[5]['retiringPids']);self.assertNotIn(5004,snapshots[5]['retiringPids'])
+        self.assertEqual(sorted(snapshots[5]['retiringPids']),[5001,5002])
+        # A lower ceiling does retire busy workers (offline / capacity drop).
+        self.assertIn(5000,snapshots[7]['retiringPids'] if len(snapshots)>7 else snapshots[6]['retiringPids'])
 
     async def test_lost_registry_does_not_scale_from_unknown_activity_or_advertise_ready(self):
         snapshots,signals=await self.run_manager([

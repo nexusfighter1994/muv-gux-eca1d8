@@ -5,7 +5,8 @@
 // frameshift route reports that Home could take one more, ONE extra render is admitted
 // (a probe) so idle Home slots are filled without waiting for a server slot.
 // Shared through globalThis: ESM, CJS and hot-loaded copies see one counter.
-const MAX_EXTRA = 4;
+// Home (up to 8) plus a RunPod burst pod (up to 4).
+const MAX_EXTRA = 12;
 const state = globalThis.__vfHomeGraphicsRemote ||= { total: 0, byResource: Object.create(null), started: 0, ended: 0 };
 
 function wake() {

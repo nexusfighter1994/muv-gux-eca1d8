@@ -3,6 +3,9 @@ import crypto from 'node:crypto';
 import {createServerPermits} from './home-queue.mjs';
 import {readTransferRuntime} from './pc-transfer-api.mjs';
 import {createHomeSiglipClient,createHomeSiglipRankSender} from './home-siglip-transport.mjs';
+import {createPodSiglip,combineRank} from './runpod/pod-siglip.mjs';
+import siglipNativeCap from './siglip-native-cap.cjs';
+import pcStatusExtras from './pc-status-extras.cjs';
 
 export function isHomeSiglipEmbedCallback(callback){
   return [
@@ -117,6 +120,7 @@ export function installHomeSiglipAdmission({scheduler,getState,getContext,claim,
   setAdmission(function(lane,...args){return lane==='siglip'?queue.serverView(()=>admission.call(this,lane,...args)):admission.call(this,lane,...args);});
   const release=getRelease();
   setRelease(function(lane,jobId,success,resource,boosted){
+    boosted=siglipNativeCap.releaseToken(lane,boosted);
     if(lane==='siglip'&&queue.validScope(boosted)){queue.release(boosted,success);boosted=false;}
     return release.call(this,lane,jobId,success,resource,boosted);
   });
@@ -139,6 +143,9 @@ export function installHomeSiglipAdmission({scheduler,getState,getContext,claim,
     if(value.siglip){value.siglip.active=Math.max(0,value.siglip.active-home.active);value.siglip.home=home;}
     return value;
   };
+  // While the PC SigLIP is healthy the native lane takes at most one embedding (siglip-native-cap.cjs);
+  // the dispatcher getter comes from scheduler-dispatch-install.py.
+  if(globalThis.__vfSchedulerDispatch)globalThis.__vfSchedulerDispatch=siglipNativeCap.wrapDispatch(globalThis.__vfSchedulerDispatch,getAdmission);
   globalThis.__vfHomeSiglipQueue=queue;
   globalThis.__vfHomeSiglipScope=()=>queue.getScope(getContext()?.leases?.get('siglip')?.boosted);
   globalThis.__vfHomeSiglipAttachSignal=signal=>{
@@ -161,6 +168,7 @@ export function installHomeSiglipAdmission({scheduler,getState,getContext,claim,
     const entry=layer.route.stack.at(-1),original=entry.handle;
     entry.handle=function(req,res,next){const send=res.json;res.json=function(body){res.json=send;return send.call(this,{...body,homeSiglipQueue:queue.stats()});};return original.call(this,req,res,next);};
   }
+  pcStatusExtras.wrapStatusRoute(app);
   const timer=schedule(()=>{queue.recoveries().sweep();queue.drain();});timer.unref?.();queue.timer=timer;
   return queue;
 }
@@ -172,13 +180,14 @@ export function startHomeSiglipHealth({readConfig,readToken,url,now=Date.now,sch
     try{
       const config=readConfig();
       if(config.enabled!==true||config.siglipEnabled!==true){health=null;return;}
-      const response=await fetch(url+'/health',{headers:{Authorization:'Bearer '+readToken()},signal:AbortSignal.timeout(2500)});
+      const response=await fetch(url+'/health',{headers:{Authorization:'Bearer '+readToken()},signal:AbortSignal.timeout(5000)});
       if(!response.ok)throw Error('PC health unavailable');
       const value=await response.json();
       if(value.ready!==true||value.device!=='cuda'||value.model_id!=='google/siglip2-base-patch16-384'
-        ||value.model_revision!=='f775b65a79762255128c981547af89addcfe0f88'||value.multi_query!==true)throw Error('PC model mismatch');
+        ||value.model_revision!=='f775b65a79762255128c981547af89addcfe0f88'||value.multi_query!==true){health=null;return;}
       health=value;at=now();
-    }catch{health=null;}finally{busy=false;}
+    // A probe lost to event-loop lag keeps the last good health; getCapacity still expires it after 10 s.
+    }catch{}finally{busy=false;}
   };
   const timer=schedule(probe);timer.unref?.();void probe();
   return {getCapacity(){
@@ -201,9 +210,14 @@ export function installHomeSiglipStartup(deps){
     const readToken=()=>fs.readFileSync(process.env.VF_PC_BOOST_TOKEN_FILE||'/data/runtime/pc-boost-token','utf8').trim();
     const url=(process.env.VF_PC_BOOST_SIGLIP_URL||'http://10.0.3.1:18194').replace(/\/$/,'');
     const health=startHomeSiglipHealth({readConfig,readToken,url});
-    const queue=installHomeSiglipAdmission({...deps,getCapacity:health.getCapacity});
-    const rankHome=createHomeSiglipRankSender({getScope:globalThis.__vfHomeSiglipScope,
+    // A ready RunPod burst pod adds its SigLIP GPU slots (node/runpod/pod-siglip.mjs).
+    const pod=createPodSiglip({getScope:globalThis.__vfHomeSiglipScope,budget:globalThis.__vfHomeSiglipBuffers,
+      readTransfer:()=>readTransferRuntime().limits,fflow});
+    globalThis.__vfPodSiglip=pod;
+    const queue=installHomeSiglipAdmission({...deps,getCapacity:()=>health.getCapacity()+pod.capacity()});
+    const rankPc=createHomeSiglipRankSender({getScope:globalThis.__vfHomeSiglipScope,
       budget:globalThis.__vfHomeSiglipBuffers,readConfig,readToken,readTransfer:()=>readTransferRuntime().limits,url,fflow});
+    const rankHome=combineRank({rankHome:rankPc,homeCapacity:health.getCapacity,pod});
     createHomeSiglipClient({client,getScope:globalThis.__vfHomeSiglipScope,isRecovery:globalThis.__vfHomeSiglipRecovery,rankHome});
     globalThis.__vfHomeSiglipTransportStats=client.__vfHomeSiglipTransport.stats;
     globalThis.__vfHomeSiglipHealth=health;

@@ -61,7 +61,7 @@ test('Home queue dispatch is distinct from actual CPU/GPU busy counters',()=>{
   }finally{dom.window.close();}
 });
 
-test('Map/Motion GPU work has its own row and is not labeled as an NVENC encode',()=>{
+test('Motion (CPU) / Maps work has its own row: excluded from the CPU row only, never labeled NVENC',()=>{
   const rows=['cpu','gpu','graphics'].map(key=>`<li data-homepc-row="${key}"><strong></strong><span class="vc-faint"></span></li>`).join('');
   const dom=new JSDOM(rows,{url:'https://vidforge.example/jobs/test',runScripts:'outside-only'});
   try{
@@ -69,8 +69,8 @@ test('Map/Motion GPU work has its own row and is not labeled as an NVENC encode'
     dom.window.eval('renderConcurrency')({config:{enabled:true},health:{ffmpeg:{ready:true,reachable:true,gpuAvailable:true,nvencReady:true,
       cpuBusy:1,cpuCapacity:18,gpuBusy:3,gpuCapacity:6,graphicsBusy:1,graphicsCapacity:1,completedMap:2,completedMotion:3}}});
     const query=key=>dom.window.document.querySelector(`[data-homepc-row="${key}"]`).textContent;
-    assert.match(query('cpu'),/0\/18 busy/);assert.match(query('gpu'),/2\/6 busy/);
-    assert.match(query('graphics'),/1\/1 busy.*2 maps.*3 motion completed/);
+    assert.match(query('cpu'),/0\/18 busy/);assert.match(query('gpu'),/3\/6 busy/);
+    assert.match(query('graphics'),/1\/1 busy \| 3 motion \| 2 maps completed \(PC total\)/);
     assert.doesNotMatch(query('graphics'),/NVENC/);
   }finally{dom.window.close();}
 });

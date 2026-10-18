@@ -53,10 +53,11 @@ async function fixture(root, {opaque = false, seconds = 0.125} = {}) {
   return file;
 }
 
-async function simulatedPerf(root, renderer = 'd3d11/nvidia') {
-  const dir = path.join(root, '.debug', 'synthetic-job');
+// The renderer's perf summary records the browser mode it captured with.
+async function simulatedPerf(root, mode = 'software', job = 'synthetic-job') {
+  const dir = path.join(root, '.debug', job);
   await fs.mkdir(dir, {recursive: true});
-  await fs.writeFile(path.join(dir, 'perf-summary.json'), JSON.stringify({drawElement: {gpuRenderer: renderer}}));
+  await fs.writeFile(path.join(dir, 'perf-summary.json'), JSON.stringify({observability: {capture: {browserGpuMode: mode}}}));
 }
 
 test('Home may capture with up to the server worker count', async () => {
@@ -175,78 +176,42 @@ test('worker renders MOV with original HTML/assets/renderOnly and remote workers
     assert.equal(result.kind, kind);
     assert.equal(result.payloadSha256, payloadSha256(original));
     assert.equal(result.sha256, sha(Buffer.from(result.data, 'base64')));
-    assert.equal(result.backend, 'd3d11/nvidia');
+    assert.equal(result.backend, 'software/cpu');
     assert.deepEqual(await fs.readdir(root), []);
   });
 });
 
-test('worker requires pinned runtime and never accepts software/no perf evidence', async () => {
+test('Home renders with the software browser mode the server itself uses', async () => {
+  const {RENDER_ENV, RENDER_BACKEND} = await worker();
+  assert.deepEqual({...RENDER_ENV}, {PRODUCER_BROWSER_GPU_MODE: 'software', PRODUCER_DISABLE_GPU: 'true'});
+  assert.equal(RENDER_BACKEND, 'software/cpu');
+});
+
+test('worker requires pinned runtime and a software-mode summary for every render', async () => {
   const {execute, renderPinned} = await worker();
   await assert.rejects(renderPinned({}, {}), /runtime pins/);
   await temporary(async root => {
-    for (const evidence of [null, 'swiftshader', 'software rasterizer']) {
+    const cases = [
+      async () => {},
+      o => simulatedPerf(o.workDir, 'hardware'),
+      o => simulatedPerf(o.workDir, null),
+      // parallel capture: one summary per worker job, all must be software
+      async o => { await simulatedPerf(o.workDir, 'software', 'a'); await simulatedPerf(o.workDir, 'hardware', 'b'); },
+    ];
+    for (const perf of cases) {
       await assert.rejects(execute(payload(), {contract, jobRoot: root}, {renderNative: async o => {
         await fs.copyFile(await fixture(o.workDir), o.targetPath);
-        if (evidence) await simulatedPerf(o.workDir, evidence);
-      }}), /hardware proof/);
+        await perf(o);
+      }}), /render proof/);
     }
+    const result = await execute(payload({workers: 3, sourceWorkers: 3}), {contract, jobRoot: root}, {renderNative: async o => {
+      await fs.copyFile(await fixture(o.workDir), o.targetPath);
+      await simulatedPerf(o.workDir, 'software', 'a');
+      await simulatedPerf(o.workDir, 'software', 'b');
+    }});
+    assert.equal(result.backend, 'software/cpu');
     assert.deepEqual(await fs.readdir(root), []);
   });
-});
-
-async function parallelPerf(root, extra = {}) {
-  const dir = path.join(root, '.debug', 'parallel-job');
-  await fs.mkdir(dir, {recursive: true});
-  await fs.writeFile(path.join(dir, 'perf-summary.json'), JSON.stringify({drawElement: {mode: 'screenshot', clampReason: 'parallel', ...extra}}));
-}
-
-test('parallel screenshot capture is proven by probing the pinned browser, once', async () => {
-  const {execute} = await worker();
-  await temporary(async root => {
-    let probes = 0;
-    const result = await execute(payload({workers: 3, sourceWorkers: 3}), {contract, jobRoot: root}, {
-      renderNative: async o => { await fs.copyFile(await fixture(o.workDir), o.targetPath); await parallelPerf(o.workDir); },
-      probeGpu: async (config, workDir) => { probes++; assert.equal(config.contract, contract); assert.ok(workDir.startsWith(root)); return 'd3d11/nvidia'; }});
-    assert.equal(result.backend, 'd3d11/nvidia');
-    assert.equal(probes, 1);
-    assert.deepEqual(await fs.readdir(root), []);
-  });
-});
-
-test('parallel proof fails closed: software probe, probe error, unclamped screenshot, foreign renderer', async () => {
-  const {execute} = await worker();
-  await temporary(async root => {
-    const cases = [
-      [o => parallelPerf(o.workDir), async () => 'swiftshader/other'],
-      [o => parallelPerf(o.workDir), async () => { throw Error('launch failed'); }],
-      [o => parallelPerf(o.workDir, {clampReason: undefined}), async () => 'd3d11/nvidia'],
-      [o => parallelPerf(o.workDir, {gpuRenderer: 'swiftshader/other'}), async () => 'd3d11/nvidia'],
-      [async o => { await parallelPerf(o.workDir); await simulatedPerf(o.workDir, 'swiftshader'); }, async () => 'd3d11/nvidia'],
-    ];
-    for (const [perf, probeGpu] of cases) {
-      await assert.rejects(execute(payload({workers: 3, sourceWorkers: 3}), {contract, jobRoot: root}, {
-        renderNative: async o => { await fs.copyFile(await fixture(o.workDir), o.targetPath); await perf(o); }, probeGpu}), /hardware proof/);
-    }
-    assert.deepEqual(await fs.readdir(root), []);
-  });
-});
-
-test('compile-gated screenshot capture (e.g. mix_blend_mode) is proven by the probe too', async () => {
-  const {execute, proveBackend} = await worker();
-  await temporary(async root => {
-    let probes = 0;
-    const result = await execute(payload(), {contract, jobRoot: root}, {
-      renderNative: async o => { await fs.copyFile(await fixture(o.workDir), o.targetPath); await parallelPerf(o.workDir, {clampReason: undefined, compileGate: 'mix_blend_mode'}); },
-      probeGpu: async () => { probes++; return 'd3d11/nvidia'; }});
-    assert.equal(result.backend, 'd3d11/nvidia');
-    assert.equal(probes, 1);
-  });
-  const probe = async () => 'd3d11/nvidia';
-  for (const d of [{mode: 'screenshot', compileGate: ''}, {mode: 'drawelement', compileGate: 'mix_blend_mode'},
-    {mode: 'screenshot', compileGate: 'mix_blend_mode', gpuRenderer: 'swiftshader/other'}, {mode: 'screenshot', compileGate: 7}]) {
-    await assert.rejects(proveBackend([d], probe), /hardware proof/);
-  }
-  await assert.rejects(proveBackend([{mode: 'screenshot', compileGate: 'mix_blend_mode'}], async () => 'swiftshader/other'), /hardware proof/);
 });
 
 test('alphaExtrema equals a full byte loop for every chunk shape', async () => {
@@ -264,34 +229,14 @@ test('alphaExtrema equals a full byte loop for every chunk shape', async () => {
   }
 });
 
-test('single-worker evidence never launches the probe', async () => {
+test('uploaded perf-summary asset cannot forge render evidence', async () => {
   const {execute} = await worker();
   await temporary(async root => {
-    const probeGpu = async () => { throw Error('probe must not run'); };
-    const result = await execute(payload(), {contract, jobRoot: root}, {probeGpu,
-      renderNative: async o => { await fs.copyFile(await fixture(o.workDir), o.targetPath); await simulatedPerf(o.workDir); }});
-    assert.equal(result.backend, 'd3d11/nvidia');
-    await assert.rejects(execute(payload(), {contract, jobRoot: root}, {probeGpu,
-      renderNative: async o => { await fs.copyFile(await fixture(o.workDir), o.targetPath); }}), /hardware proof/);
-  });
-});
-
-test('renderer classification matches the Home GTX D3D11 string and rejects SwiftShader', async () => {
-  const {classifyRenderer, HARDWARE_GPU_ARGS} = await worker();
-  assert.equal(classifyRenderer('ANGLE (NVIDIA, NVIDIA GeForce GTX 980 Ti (0x000017C8) Direct3D11 vs_5_0 ps_5_0, D3D11)'), 'd3d11/nvidia');
-  assert.equal(classifyRenderer('ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)'), 'swiftshader/other');
-  assert.equal(classifyRenderer(null), null);
-  assert.ok(HARDWARE_GPU_ARGS.includes('--use-angle=d3d11') && !HARDWARE_GPU_ARGS.some(a => /swiftshader/.test(a)));
-});
-
-test('uploaded perf-summary asset cannot forge renderer hardware evidence', async () => {
-  const {execute} = await worker();
-  await temporary(async root => {
-    const bytes = Buffer.from(JSON.stringify({gpuRenderer: 'd3d11/nvidia'}));
+    const bytes = Buffer.from(JSON.stringify({observability: {capture: {browserGpuMode: 'software'}}}));
     const p = payload({assets: [{filename: 'perf-summary.json', sha256: sha(bytes), data: bytes.toString('base64')}]});
     await assert.rejects(execute(p, {contract, jobRoot: root}, {renderNative: async o => {
       await fs.copyFile(await fixture(o.workDir), o.targetPath);
-    }}), /hardware proof/);
+    }}), /render proof/);
     assert.deepEqual(await fs.readdir(root), []);
   });
 });
@@ -316,7 +261,7 @@ async function harness(root, change = {}) {
       if (method === 'GET') return Response.json({version: 1, contract, slots: 1, kinds: [kind]});
       if (method === 'DELETE') return Response.json({terminated: true});
       const p = JSON.parse(init.body); posted.push(p);
-      const receipt = {version: 1, id: p.id, contract, kind, format: 'mov', backend: 'd3d11/nvidia',
+      const receipt = {version: 1, id: p.id, contract, kind, format: 'mov', backend: 'software/cpu',
         payloadSha256: payloadSha256(p), sha256: sha(bytes), data: bytes.toString('base64'), probe: await verify(file, p)};
       return Response.json(change.receipt ? change.receipt(receipt) : receipt);
     }, ...change.config};
@@ -439,7 +384,7 @@ async function slowBodyHarness(root, freshNativeBudget) {
     if (init.method === 'DELETE') return Response.json({terminated: true});
     if ((init.method ?? 'GET') === 'GET') return Response.json({version: 1, contract, slots: 1, kinds: [kind]});
     const p = JSON.parse(init.body);
-    const receipt = JSON.stringify({version: 1, id: p.id, contract, kind, format: 'mov', backend: 'd3d11/nvidia',
+    const receipt = JSON.stringify({version: 1, id: p.id, contract, kind, format: 'mov', backend: 'software/cpu',
       payloadSha256: payloadSha256(p), sha256: sha(bytes), data: bytes.toString('base64'), probe: await verify(file, p)});
     await new Promise(r => setTimeout(r, 300));
     const body = new ReadableStream({start(c) {

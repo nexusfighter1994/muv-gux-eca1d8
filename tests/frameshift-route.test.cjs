@@ -204,8 +204,8 @@ test('motionSlots from the live PC Boost settings bounds parallel Home offers (c
   assert.equal(r.nativeCount(), 1);
 });
 
-test('invalid motionSlots keep the default of 2; the slot cap is 4', async () => {
-  for (const motionSlots of [0, 5, 2.5, '3', null]) {
+test('invalid motionSlots keep the default of 2; the slot cap is 8', async () => {
+  for (const motionSlots of [0, 9, 2.5, '3', null]) {
     const r = liveRoute({ motionSlots });
     const a = r.run(), b = r.run();
     await tick();
@@ -299,5 +299,75 @@ test('probe cools down after 3 offers in a row ended on the server; busy/scope r
     await run();
     assert.equal(offerable(), false, 'third Home failure in a row starts the cool-down');
     assert.equal(route.stats.probeCooldowns, 1);
+  } finally { globalThis.__vfHomeCapabilities = saved; }
+});
+
+test('a verified-unreachable Home PC is skipped at once (no 5 s health wait); stale or unknown status still offers', async () => {
+  const saved = globalThis.__vfHomeCapabilities;
+  try {
+    globalThis.__vfHomeCapabilities = { ready: false, checkedAt: Date.now() };
+    const s = setup();
+    assert.deepEqual(await s.run({ ...base, compositionHtml: OPAQUE, workers: 3 }), { native: true });
+    assert.equal(s.calls.home.length, 0);
+    assert.equal(s.route.stats.reasons.home_unready, 1);
+    globalThis.__vfHomeCapabilities = { ready: false, checkedAt: Date.now() - 60000 };
+    assert.equal((await s.run({ ...base, compositionHtml: OPAQUE, workers: 3 })).home, 'opaque', 'stale status: try Home');
+    delete globalThis.__vfHomeCapabilities;
+    assert.equal((await s.run({ ...base, compositionHtml: OPAQUE, workers: 3 })).home, 'opaque', 'no status yet: try Home');
+  } finally { if (saved === undefined) delete globalThis.__vfHomeCapabilities; else globalThis.__vfHomeCapabilities = saved; }
+});
+
+function podRoute({ homeSlots = 1, caps = { ready: true }, podSlots = 1, homeFails = false } = {}) {
+  const als = new AsyncLocalStorage();
+  const lease = { resourceKey: 'frameshift', released: false, parked: false, signal: new AbortController().signal };
+  const scope = { jobId: 'job', lanes: new Set(['render']), leases: new Map([['render', lease]]) };
+  const calls = { home: 0, pod: 0, native: 0, leases: [] };
+  let podInflight = 0;
+  const burst = { backend: () => ({ endpoint: 'https://p-8080.proxy.runpod.net', token: 't', slots: podSlots, inflight: podInflight }),
+    acquire: () => { if (podInflight >= podSlots) return null; podInflight++; const l = { id: 'p', released: false, release() { if (!this.released) { this.released = true; podInflight--; } } }; calls.leases.push(l); return l; } };
+  const gates = [];
+  const homeHook = fallback => async o => { calls.home++; await new Promise(r => gates.push(r)); return homeFails ? fallback(o) : { home: true }; };
+  const route = createFrameshiftRoute({ RU: () => 'job', getStore: () => als.getStore(), mF: () => 'render', jp: new Map(), Xl: () => null, isJobAborted: () => false,
+    getConfig: () => ({ getSettings: () => ({ homeMotion: true, motionSlots: homeSlots }), getToken: () => 't', contract: 'c' }), getBurst: () => burst,
+    loadAlpha: async () => ({ createAlphaHook: homeHook }), loadOpaque: async () => ({ createMotionHook: homeHook }),
+    loadPod: async () => ({ createPodHook: (fallback, cfg) => async o => { calls.pod++; assert.ok(cfg.lease); assert.equal(cfg.kind, 'opaque'); return o.podFails ? fallback(o) : { pod: true }; } }) });
+  const render = route.wrap(async () => { calls.native++; return { native: true }; });
+  const run = (extra = {}) => als.run(scope, () => render({ ...base, compositionHtml: OPAQUE, workers: 3, ...extra }));
+  globalThis.__vfHomeCapabilities = { ...caps, checkedAt: Date.now() };
+  return { route, run, calls, gates, podInflight: () => podInflight };
+}
+
+test('RunPod burst: when Home slots are full, the next offer goes to a free pod slot; then the server', async () => {
+  const saved = globalThis.__vfHomeCapabilities;
+  try {
+    const r = podRoute();
+    const first = r.run();
+    await tick();
+    assert.deepEqual(await r.run(), { pod: true }, 'Home full -> pod');
+    assert.equal(r.podInflight(), 0, 'pod lease released after success');
+    assert.equal(r.route.offerable(), true, 'probe stays open while the pod has a free slot');
+    r.gates.forEach(g => g());
+    assert.deepEqual(await first, { home: true });
+    assert.deepEqual(r.route.stats.pod, { tried: 1, home: 1, native: 0 });
+    const f = podRoute();
+    const busy = f.run();
+    await tick();
+    assert.deepEqual(await f.run({ podFails: true }), { native: true }, 'pod failure renders natively');
+    assert.equal(f.podInflight(), 0, 'fallback released the pod slot');
+    assert.deepEqual(f.route.stats.pod, { tried: 1, home: 0, native: 1 });
+    f.gates.forEach(g => g()); await busy;
+  } finally { globalThis.__vfHomeCapabilities = saved; }
+});
+
+test('RunPod burst: an unreachable Home PC sends offers straight to the pod; no pod and no Home -> native', async () => {
+  const saved = globalThis.__vfHomeCapabilities;
+  try {
+    const r = podRoute({ caps: { ready: false } });
+    assert.deepEqual(await r.run(), { pod: true });
+    assert.equal(r.calls.home, 0);
+    const none = podRoute({ caps: { ready: false }, podSlots: 0 });
+    assert.deepEqual(await none.run(), { native: true });
+    assert.equal(none.route.stats.reasons.home_unready, 1);
+    assert.equal(none.route.offerable(), false);
   } finally { globalThis.__vfHomeCapabilities = saved; }
 });

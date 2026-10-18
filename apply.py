@@ -57,6 +57,18 @@ _proc_spec.loader.exec_module(_proc_install)
 _ram_spec = importlib.util.spec_from_file_location('vf_ram_allocations_install', HERE / 'ram-allocations-install.py')
 _ram_install = importlib.util.module_from_spec(_ram_spec)
 _ram_spec.loader.exec_module(_ram_install)
+_lane_spec = importlib.util.spec_from_file_location('vf_scheduler_lane_install', HERE / 'scheduler-lane-install.py')
+_lane_install = importlib.util.module_from_spec(_lane_spec)
+_lane_spec.loader.exec_module(_lane_install)
+_dispatch_spec = importlib.util.spec_from_file_location('vf_scheduler_dispatch_install', HERE / 'scheduler-dispatch-install.py')
+_dispatch_install = importlib.util.module_from_spec(_dispatch_spec)
+_dispatch_spec.loader.exec_module(_dispatch_install)
+_op_spec = importlib.util.spec_from_file_location('vf_op_priority_install', HERE / 'op-priority-install.py')
+_op_install = importlib.util.module_from_spec(_op_spec)
+_op_spec.loader.exec_module(_op_install)
+_media_spec = importlib.util.spec_from_file_location('vf_home_media_install', HERE / 'home-media-install.py')
+_media_install = importlib.util.module_from_spec(_media_spec)
+_media_spec.loader.exec_module(_media_install)
 FRAMESHIFT_LIB = Path(os.environ.get('VF_FRAMESHIFT_LIB', str(DIST.parent.parent / 'render' / 'frameshift' / 'lib')))
 
 
@@ -115,7 +127,7 @@ def fflow():
     note('fflow.tempDirectoryRetention', True)
     _fx_sentinel_install.install(CORE.parent.parent, apply=True)
     note('fflow.fxOutputSentinel', True)
-    for name in ('mod_flags.py', 'mod_boot.py', 'pc_ffmpeg_protocol.py', 'pc_transfer_limits.py', 'pc_ffmpeg_hook.py', 'pc_scene_hook.py', 'ffmpeg_slot_cleanup.py', 'pc_home_queue.py', 'pc_home_pool.py', 'pc_node_normalize_cli.py'):
+    for name in ('mod_flags.py', 'mod_boot.py', 'pc_ffmpeg_protocol.py', 'pc_transfer_limits.py', 'pc_ffmpeg_hook.py', 'pc_scene_hook.py', 'ffmpeg_slot_cleanup.py', 'pc_home_queue.py', 'pc_home_pool.py', 'pc_node_normalize_cli.py', 'pc_node_media_cli.py', 'pc_node_media_recipes.py', 'ffmpeg_duration_timeout.py'):
         shutil.copy2(HERE / 'fflow' / name, CORE / name)
     for file, patch in ((CORE.parent / 'queue' / 'jobs.py', _home_install.patch_jobs),
                         (CORE.parent / 'queue' / 'worker.py', _home_install.patch_worker)):
@@ -161,6 +173,18 @@ def fflow():
         ast.parse(text)
         write(target, text, crlf)
     note('fflow.slotCleanup', True)
+
+    # Timeouts grow with the media length (ffmpeg_duration_timeout.py).
+    text, crlf = read(target)
+    timeout_marker = '# vf-custom:ffmpeg-duration-timeout-v1'
+    if timeout_marker not in text:
+        text += (
+            '\n' + timeout_marker + '\n'
+            'from src.core.ffmpeg_duration_timeout import install_duration_timeout as _vf_install_duration_timeout\n'
+            '_vf_install_duration_timeout(FFmpegExecutor)\n'
+        )
+        ast.parse(text)
+        write(target, text, crlf)
 
     text, crlf = read(ROUTES)
     if MARK in text:
@@ -467,6 +491,9 @@ def node():
         text = _broll_install.patch_node(text)
         text = _proc_install.patch_node(text)
         text = _ram_install.patch_node(text)
+        text = _lane_install.patch_node(text)
+        text = _dispatch_install.patch_node(text)
+        text = _op_install.patch_node(text)
         note('node.homeQueue', True)
         write(bundle, text, crlf)
         note('node.bundle', True, 'already patched')
@@ -656,6 +683,10 @@ def node():
     text = _broll_install.patch_node(text)
     text = _proc_install.patch_node(text)
     text = _ram_install.patch_node(text)
+    text = _lane_install.patch_node(text)
+    text = _dispatch_install.patch_node(text)
+    text = _op_install.patch_node(text)
+    text = _media_install.patch_node(text)
     write(bundle, text, crlf)
     (target / 'hooks-build.json').write_text(json.dumps({'fingerprints': {**found, 'app': app, 'owner': owner, 'db': db}, 'report': report}, indent=1))
 
@@ -685,8 +716,8 @@ def ui():
     text, crlf = read(index)
     if MARK not in text and '</head>' in text:
         tags = ('    <!-- vf-custom -->\n'
-                '    <link rel="stylesheet" href="/assets/pc-boost-settings-20261002.css?v=bandwidth25-20261011b">\n'
-                '    <script type="module" src="/assets/pc-boost-settings-20261002.js?v=motion-share-20261017b"></script>\n'
+                '    <link rel="stylesheet" href="/assets/pc-boost-settings-20261002.css?v=explain-20261017a">\n'
+                '    <script type="module" src="/assets/pc-boost-settings-20261002.js?v=motion-cpu-20261017e"></script>\n'
                 '    <link rel="stylesheet" href="/assets/pc-transfer-settings-20261011.css?v=size-20261011b">\n'
                 '    <script type="module" src="/assets/pc-transfer-settings-20261011.js?v=size-nvenc-20261013a"></script>\n'
                 '    <script type="module" src="/assets/vf-custom-tab.js?v=vfc1"></script>\n')
@@ -698,7 +729,7 @@ def ui():
             for extension in ('js', 'css'):
                 text = re.sub(
                     rf'(/assets/pc-boost-settings-20261002\.{extension})\?v=[^"\s]+',
-                    r'\1?v=motion-share-20261017b' if extension == 'js' else r'\1?v=bandwidth25-20261011b', text)
+                    r'\1?v=motion-cpu-20261017e' if extension == 'js' else r'\1?v=explain-20261017a', text)
             additions = ''
             for extension in ('js', 'css'):
                 text = re.sub(
@@ -731,7 +762,7 @@ if __name__ == '__main__':
                     '--root', str(DIST.parent.parent), '--apply', '--prebundle'], check=True)
     _route_install.patch_library(FRAMESHIFT_LIB)
     checks = [['node', '--check', str(FRAMESHIFT_LIB / name)] for name in _route_install.LIBRARY] + [['node', '--check', str(DIST / 'index.mjs')]] + [['node', '--check', str(p)] for p in (DIST / 'vf-custom').glob('*.mjs')] \
-        + [[sys.executable, '-m', 'py_compile', str(CORE / 'ffmpeg.py'), str(ROUTES), str(CORE / 'pc_ffmpeg_hook.py'), str(CORE / 'pc_scene_hook.py'), str(CORE / 'pc_ffmpeg_protocol.py'), str(CORE / 'pc_transfer_limits.py')]]
+        + [[sys.executable, '-m', 'py_compile', str(CORE / 'ffmpeg.py'), str(ROUTES), str(CORE / 'pc_ffmpeg_hook.py'), str(CORE / 'pc_scene_hook.py'), str(CORE / 'pc_ffmpeg_protocol.py'), str(CORE / 'pc_transfer_limits.py'), str(CORE / 'ffmpeg_duration_timeout.py')]]
     for check in checks:
         subprocess.run(check, check=True)
     (DIST / 'vf-custom' / 'hooks-build.json').write_text(json.dumps({**json.loads((DIST / 'vf-custom' / 'hooks-build.json').read_text()), 'report': report}, indent=1))

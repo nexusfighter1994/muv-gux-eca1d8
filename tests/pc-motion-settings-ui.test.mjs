@@ -22,7 +22,7 @@ test('Home motion slots and time share are editable PC Boost settings with bound
     const slots = settings.form.elements.namedItem('motionSlots'), share = settings.form.elements.namedItem('motionHomeShare');
     assert.equal(slots.value, '3');
     assert.equal(share.value, '85');
-    assert.equal([slots.min, slots.max].join(), '1,4');
+    assert.equal([slots.min, slots.max].join(), '1,8');
     assert.equal([share.min, share.max].join(), '50,200');
     assert.match(settings.textContent, /Parallel motion graphics/);
     assert.match(settings.textContent, /Home PC time share/);
@@ -48,5 +48,43 @@ test('only a changed motion field is sent in the PATCH', async () => {
     slots.dispatchEvent(new dom.window.Event('change', {bubbles: true}));
     assert.ok(settings.dirty.has('motionSlots'));
     assert.ok(!settings.dirty.has('motionHomeShare'));
+  } finally {dom.window.close();}
+});
+
+test('RunPod burst: toggle, thresholds, price cap and a write-only API key field with live status', () => {
+  const {dom, settings} = page();
+  try {
+    settings.accept({config: {...config, burstEnabled: true, burstStartQueue: 150, burstStopQueue: 5, burstMaxCents: 30, burstMaxHours: 8, burstApiKeySet: true,
+      burstStatus: {pod: {id: 'p1', gpu: 'NVIDIA RTX A4000', costPerHr: 0.17, ready: true}, inflight: 2, queued: 233, ledger: {seconds: 5400, cents: 25.5}}}});
+    const f = name => settings.form.elements.namedItem(name);
+    assert.equal(f('burstEnabled').checked, true);
+    assert.equal([f('burstStartQueue').value, f('burstStopQueue').value, f('burstMaxCents').value, f('burstMaxHours').value].join(), '150,5,30,8');
+    assert.equal(f('burstApiKey').type, 'password');
+    assert.equal(f('burstApiKey').value, '', 'the key is never filled in');
+    assert.match(f('burstApiKey').placeholder, /saved/);
+    const state = settings.querySelector('[data-burst-state]').textContent;
+    assert.match(state, /Pod ready: NVIDIA RTX A4000 at \$0\.17\/h, 2 rendering/);
+    assert.match(state, /233 graphics queued/);
+    assert.match(state, /today 1\.5 h, \$0\.26/);
+    settings.accept({config});
+    assert.equal(f('burstEnabled').checked, false, 'older server: off');
+    assert.match(f('burstApiKey').placeholder, /not set/);
+  } finally {dom.window.close();}
+});
+
+test('RunPod GPU types: checkbox list from the live catalog, marks prices above the cap, sends the checked list', () => {
+  const {dom, settings} = page();
+  try {
+    const gpus = [{id: 'NVIDIA RTX 4090', name: 'RTX 4090', memoryInGb: 24, price: 0.69}, {id: 'NVIDIA RTX A4000', name: 'RTX A4000', memoryInGb: 16, price: 0.17}];
+    settings.accept({config: {...config, burstMaxCents: 30, burstGpuTypes: ['NVIDIA RTX A4000', 'Gone GPU'], burstStatus: {gpus, ledger: {seconds: 0, cents: 0}}}});
+    const boxes = [...settings.querySelectorAll('input[name="burstGpuType"]')];
+    assert.deepEqual(boxes.map(b => [b.value, b.checked]), [['NVIDIA RTX 4090', false], ['NVIDIA RTX A4000', true], ['Gone GPU', true]]);
+    const text = settings.querySelector('[data-burst-gpus]').textContent;
+    assert.match(text, /RTX 4090 · 24 GB · \$0\.69\/h \(above the cap\)/);
+    assert.match(text, /RTX A4000 · 16 GB · \$0\.17\/h(?! \(above)/);
+    assert.match(text, /Gone GPU · not offered now/);
+    boxes[0].checked = true;
+    boxes[0].dispatchEvent(new dom.window.Event('input', {bubbles: true}));
+    assert.ok(settings.dirty.has('burstGpuTypes'));
   } finally {dom.window.close();}
 });

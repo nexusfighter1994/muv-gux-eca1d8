@@ -181,7 +181,7 @@ test('Home admission waits for registered independent workers, never changes the
   assert.equal(published[0].extra,24,'Pool warmup receives desired capacity independently');
   pool={...pool,readyWorkers:3};tick();
   await new Promise(r=>setTimeout(r,0));
-  assert.equal(queue.stats().active,3);
+  assert.equal(queue.stats().active,7,'claims run ahead of 3 ready workers: max(2x3, 3+4)');
   delete globalThis.__vfHomeQueue;delete globalThis.__vfHomeQueueEnabled;delete globalThis.__vfHomeCapabilities;
 });
 
