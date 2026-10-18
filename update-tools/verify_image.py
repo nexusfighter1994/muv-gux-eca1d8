@@ -34,6 +34,7 @@ MODULES = (
     "pc-boost-api.mjs", "pc-transfer-api.mjs", "sourcing-deadline.mjs",
     "stream-compat.mjs", "thumbnail-openlux.mjs", "thumbnail-subject-identity.cjs",
     "bounded-safe-join.cjs", "validate-copy.cjs", "long-assembly.cjs",
+    "home-camera.mjs", "home-camera-cli.mjs", "home-scenes.mjs",
 )
 EXTERNAL_JS = (
     BUNDLE,

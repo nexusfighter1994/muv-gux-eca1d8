@@ -127,7 +127,7 @@ def fflow():
     note('fflow.tempDirectoryRetention', True)
     _fx_sentinel_install.install(CORE.parent.parent, apply=True)
     note('fflow.fxOutputSentinel', True)
-    for name in ('mod_flags.py', 'mod_boot.py', 'pc_ffmpeg_protocol.py', 'pc_transfer_limits.py', 'pc_ffmpeg_hook.py', 'pc_scene_hook.py', 'ffmpeg_slot_cleanup.py', 'pc_home_queue.py', 'pc_home_pool.py', 'pc_node_normalize_cli.py', 'pc_node_media_cli.py', 'pc_node_media_recipes.py', 'ffmpeg_duration_timeout.py'):
+    for name in ('mod_flags.py', 'mod_boot.py', 'pc_ffmpeg_protocol.py', 'pc_transfer_limits.py', 'pc_ffmpeg_hook.py', 'pc_scene_hook.py', 'ffmpeg_slot_cleanup.py', 'pc_home_queue.py', 'pc_home_pool.py', 'pc_node_normalize_cli.py', 'pc_node_media_cli.py', 'pc_node_media_recipes.py', 'pc_scene_graphics_cli.py', 'ffmpeg_duration_timeout.py'):
         shutil.copy2(HERE / 'fflow' / name, CORE / name)
     for file, patch in ((CORE.parent / 'queue' / 'jobs.py', _home_install.patch_jobs),
                         (CORE.parent / 'queue' / 'worker.py', _home_install.patch_worker)):
@@ -494,6 +494,9 @@ def node():
         text = _lane_install.patch_node(text)
         text = _dispatch_install.patch_node(text)
         text = _op_install.patch_node(text)
+        text = _media_install.patch_node(text)
+        text = runpy.run_path(str(HERE / 'home-camera-install.py'))['patch_node'](text)
+        text = runpy.run_path(str(HERE / 'home-scenes-install.py'))['patch_node'](text)
         note('node.homeQueue', True)
         write(bundle, text, crlf)
         note('node.bundle', True, 'already patched')
@@ -687,6 +690,8 @@ def node():
     text = _dispatch_install.patch_node(text)
     text = _op_install.patch_node(text)
     text = _media_install.patch_node(text)
+    text = runpy.run_path(str(HERE / 'home-camera-install.py'))['patch_node'](text)
+    text = runpy.run_path(str(HERE / 'home-scenes-install.py'))['patch_node'](text)
     write(bundle, text, crlf)
     (target / 'hooks-build.json').write_text(json.dumps({'fingerprints': {**found, 'app': app, 'owner': owner, 'db': db}, 'report': report}, indent=1))
 
@@ -717,7 +722,7 @@ def ui():
     if MARK not in text and '</head>' in text:
         tags = ('    <!-- vf-custom -->\n'
                 '    <link rel="stylesheet" href="/assets/pc-boost-settings-20261002.css?v=explain-20261017a">\n'
-                '    <script type="module" src="/assets/pc-boost-settings-20261002.js?v=motion-cpu-20261017e"></script>\n'
+                '    <script type="module" src="/assets/pc-boost-settings-20261002.js?v=home-scenes-20261018a"></script>\n'
                 '    <link rel="stylesheet" href="/assets/pc-transfer-settings-20261011.css?v=size-20261011b">\n'
                 '    <script type="module" src="/assets/pc-transfer-settings-20261011.js?v=size-nvenc-20261013a"></script>\n'
                 '    <script type="module" src="/assets/vf-custom-tab.js?v=vfc1"></script>\n')
@@ -729,7 +734,7 @@ def ui():
             for extension in ('js', 'css'):
                 text = re.sub(
                     rf'(/assets/pc-boost-settings-20261002\.{extension})\?v=[^"\s]+',
-                    r'\1?v=motion-cpu-20261017e' if extension == 'js' else r'\1?v=explain-20261017a', text)
+                    r'\1?v=home-scenes-20261018a' if extension == 'js' else r'\1?v=explain-20261017a', text)
             additions = ''
             for extension in ('js', 'css'):
                 text = re.sub(

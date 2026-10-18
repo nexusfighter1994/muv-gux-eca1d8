@@ -6,6 +6,14 @@ import { runRenderChild } from '../map-runtime/render-child-supervisor.mjs';
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
 const MAX=32*1024*1024;
 export async function execute(p,config){
+  if(['native-camera-nvenc-v1','native-scenes-gpu-v1'].includes(p.operation)){
+    for(const [file,expected]of Object.entries(config.files??{}))if(hash(await fs.readFile(file))!==expected)throw Error('Map runtime changed');
+    const {executeCamera}=await import('../native-camera/bridge.mjs');
+    const root=await fs.mkdtemp(path.join(process.env.VF_MOTION_JOB_ROOT??os.tmpdir(),'vfcamera-'));
+    try{return await executeCamera(p,new URL('../native-camera/runtime.json',import.meta.url),root);}
+    finally{await fs.rm(root,{recursive:true,force:true});}
+  }
+  if(p.operation!=null)throw Error('Unknown graphics operation');
   if(p.version!==1||!/^[a-f0-9]{32}$/.test(p.id)||p.contract!==config.contract
     ||!Number.isInteger(p.timeoutMs)||p.timeoutMs<1||p.timeoutMs>600000
     ||p.params?.fps!==24||p.params.width!==1920||p.params.height!==1080

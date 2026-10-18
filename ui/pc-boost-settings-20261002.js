@@ -429,6 +429,14 @@ function renderConcurrency(data) {
       continue;
     }
     const worker = currentWorkerHealth(data?.health, key === 'siglip' ? 'siglip' : 'ffmpeg');
+    if (key === 'scene' && data?.homeQueue?.scenes) {
+      const scenes = data.homeQueue.scenes;
+      row.querySelector('strong').textContent = 'Home PC Scenes (CPU / GPU decode)';
+      const state = connectionState(worker, false);
+      row.querySelector('.vc-faint').textContent = `${state} | ${number(scenes.gpu)} GPU + ${number(scenes.cpu)} CPU completed (since activation) | ${number(scenes.fallback)} server fallbacks`;
+      row.classList.remove('vc-worker-row--busy');
+      continue;
+    }
     if (key === 'graphics') {
       // Busy of the slots the server offers (PC Boost motionSlots), then where motion went since the route started.
       const motion = data?.homeMotion, slots = Number.isSafeInteger(motion?.slots) ? motion.slots : worker?.graphicsCapacity;

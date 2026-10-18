@@ -6,6 +6,16 @@ import { createRequire } from 'node:module';
 const require = createRequire('C:/Users/user/Documents/Codex/2026-07-04/du-bist-codex-auf-users-windows/signalforge-recovered/package.json');
 const { JSDOM } = require('jsdom');
 const source = fs.readFileSync(new URL('../ui/pc-boost-settings-20261002.js', import.meta.url), 'utf8');
+test('native Home scenes show separate CPU/GPU completions without claiming old WSL slots',()=>{
+  const {dom}=fixture();
+  try{
+    dom.window.document.body.insertAdjacentHTML('beforeend','<div data-homepc-row="scene"><strong></strong><span class="vc-faint"></span></div>');
+    dom.window.eval('renderConcurrency('+JSON.stringify({homeQueue:{scenes:{gpu:7,cpu:3,fallback:2}},health:{checkedAt:new Date().toISOString(),ffmpeg:{ready:true,reachable:true,sceneReady:false}}})+')');
+    const row=dom.window.document.querySelector('[data-homepc-row="scene"]');
+    assert.match(row.textContent,/GPU decode/);assert.match(row.textContent,/7 GPU \+ 3 CPU completed/);
+    assert.doesNotMatch(row.textContent,/Not ready|busy/);
+  }finally{dom.window.close();}
+});
 function fixture(fetchImpl = () => new Promise(() => {})) {
   const dom = new JSDOM('<div id="engine-health"></div>', {
     url: 'https://vidforge.example/custom', runScripts: 'outside-only', pretendToBeVisual: true,

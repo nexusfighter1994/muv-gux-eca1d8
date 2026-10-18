@@ -25,6 +25,14 @@ export async function verify(file,p,ffprobe='ffprobe',ffmpeg='ffmpeg',signal){
   await execFile(ffmpeg,['-v','error','-xerror','-i',file,'-map','0:v:0','-f','null','-'],{timeout:30000,windowsHide:true,signal});return v;
 }
 export async function execute(p,config){
+  if(p.operation==='native-scenes-cpu-v1'){
+    for(const [file,expected]of Object.entries(config.files))if(hash(await fs.readFile(file))!==expected)throw Error('runtime changed');
+    const {executeCamera}=await import('../native-camera/bridge.mjs');
+    const root=await fs.mkdtemp(path.join(process.env.VF_MOTION_JOB_ROOT??os.tmpdir(),'vfscene-'));
+    try{return await executeCamera(p,new URL('../native-camera/runtime.json',import.meta.url),root);}
+    finally{await fs.rm(root,{recursive:true,force:true});}
+  }
+  if(p.operation!=null)throw Error('Unknown motion operation');
   validate(p,config.contract);
   for(const [file,expected]of Object.entries(config.files))if(hash(await fs.readFile(file))!==expected)throw Error('runtime changed');
   const root=await fs.mkdtemp(path.join(process.env.VF_MOTION_JOB_ROOT??os.tmpdir(),'vfmo-'));const output=path.join(root,'result.mp4');
@@ -47,4 +55,4 @@ export async function execute(p,config){
   }finally{await fs.rm(root,{recursive:true,force:true});}
 }
 // One render per process at below-normal priority (chrome/ffmpeg children inherit it): the PC stays responsive.
-if(typeof import.meta.url==='string'&&process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){try{os.setPriority(os.constants.priority.PRIORITY_BELOW_NORMAL);}catch{}void(async()=>{try{let raw='';for await(const b of process.stdin){raw+=b;if(raw.length>48*1024*1024)throw Error('body size');}const config=JSON.parse(await fs.readFile(process.argv[2],'utf8'));const payload=JSON.parse(raw);process.stdout.write(JSON.stringify(await (payload.kind===ALPHA_KIND?executeAlpha:execute)(payload,config)));}catch(error){process.stderr.write(String(error.message).slice(0,2000));process.exitCode=1;}})();}
+if(typeof import.meta.url==='string'&&process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){void(async()=>{try{let raw='';for await(const b of process.stdin){raw+=b;if(raw.length>48*1024*1024)throw Error('body size');}const config=JSON.parse(await fs.readFile(process.argv[2],'utf8'));const payload=JSON.parse(raw);if(payload.operation!=='native-scenes-cpu-v1'){try{os.setPriority(os.constants.priority.PRIORITY_BELOW_NORMAL);}catch{}}process.stdout.write(JSON.stringify(await (payload.kind===ALPHA_KIND?executeAlpha:execute)(payload,config)));}catch(error){process.stderr.write(String(error.message).slice(0,2000));process.exitCode=1;}})();}
