@@ -49,6 +49,17 @@ test('Home failure falls back exactly once to the original renderer, inside bypa
   assert.equal(s.route.stats.opaque.native, 1);
 });
 
+test('Home artifact attribution follows successful route only, never a native fallback', async () => {
+  const before=globalThis.__vfHomeMotionEvents, records=[];
+  globalThis.__vfHomeMotionEvents={record:x=>records.push(x)};
+  try {
+    await setup().run({ ...base, compositionHtml: OPAQUE, workers: 3 });
+    await setup({homeFails:true}).run({ ...base, compositionHtml: OPAQUE, workers: 3 });
+    assert.equal(records.length,1);assert.equal(records[0].backend,'home');
+    assert.equal(records[0].kind,'opaque');assert.equal(records[0].jobId,'job');
+  } finally { globalThis.__vfHomeMotionEvents=before; }
+});
+
 test('nested calls inside bypass are never re-offered', async () => {
   const s = setup();
   await s.route.bypass.run(true, () => s.run({ ...base, compositionHtml: OPAQUE, workers: 3 }));

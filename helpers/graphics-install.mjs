@@ -8,7 +8,7 @@ const patchedBundle=patchBundle(bundleSource,'./vf-custom/home-graphics/motion-o
 const mapSource=fs.readFileSync(map,'utf8');
 let source=mapSource;
 if(!source.includes('import { renderMapOffload }')){
-  source=patchGeomap(source,'301dc95c91e370b8df3cf476a0c1ef3e399db2f224623b732ab310ca64128c8b','../../server/dist/vf-custom/home-graphics/map-offload/hook.mjs');
+  source=patchGeomap(source,'dcddcaeebe45994a6f01d33c3d3296252273a247acce6435c6af14ce7066bf8f','../../server/dist/vf-custom/home-graphics/map-offload/hook.mjs');
 }else if(source.split('return renderMapOffload(renderCartograph,{').length!==2)throw Error('Map hook drift');
 // Validate both targets before writing either; never skip an import-present alpha upgrade.
 if(patchedBundle!==bundleSource)fs.writeFileSync(bundle,patchedBundle);

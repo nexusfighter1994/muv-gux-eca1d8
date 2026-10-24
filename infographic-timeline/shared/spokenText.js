@@ -1,7 +1,25 @@
 // Render-only transcript matching, shared by Node, Remotion and HTML scenes.
 // Keep these functions self-contained: HTML scenes embed their source verbatim.
+
+// Speech tokens: letters with their combining marks (a Hindi vowel sign or a
+// Thai tone mark stays on its word) and digits. Chinese, Japanese and Thai
+// write without spaces, so the STT's word boundaries never match a label's;
+// their letters become one token each on both sides, and a phrase then
+// matches whatever the STT grouped. Latin text tokenizes exactly as before.
+export function speechTokenSpans(s) {
+  const text = String(s ?? '');
+  const out = [];
+  for (const m of text.matchAll(/[\p{L}\p{M}\p{N}]+/gu)) {
+    if (!/[\u0E00-\u0E7F\u3040-\u30FF\u31F0-\u31FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]/u.test(m[0])) { out.push({ text:m[0], index:m.index }); continue; }
+    for (const part of m[0].matchAll(/[\u0E00-\u0E7F\u3040-\u30FF\u31F0-\u31FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]\p{M}*|[^\u0E00-\u0E7F\u3040-\u30FF\u31F0-\u31FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]+/gu)) out.push({ text:part[0], index:m.index + part.index });
+  }
+  return out;
+}
+export function speechTokens(s) {
+  return speechTokenSpans(String(s ?? '').normalize('NFKC').toLowerCase().replace(/[’']/g, '')).map(t => t.text);
+}
 export function spokenTextCue(text, words) {
-  const tokens = (s) => String(s ?? '').normalize('NFKC').toLowerCase().replace(/[’']/g, '').match(/[\p{L}\p{N}]+/gu) || [];
+  const tokens = speechTokens;
   if (/^[\s$€£]*[\d,.]+\s*%?$/.test(String(text))) {
     const number = spokenNumberCue(Number(String(text).replace(/[^\d.]/g, '')), words);
     if (number) return number;
@@ -117,10 +135,10 @@ export function installSpokenTextGates(root, words, match = spokenTextCue, split
         nodes.length = 0; const split = doc.createTreeWalker(label, 4);
         while (split.nextNode()) nodes.push(split.currentNode);
       }
-      const tokens = [...text.matchAll(/[\p{L}\p{N}]+/gu)]; let offset = 0;
+      const tokens = speechTokenSpans(text); let offset = 0;
       for (const node of nodes) {
-        const token = tokens.find(t => t.index + t[0].length > offset) || tokens.at(-1);
-        const wordCue = token ? match(token[0], scoped.filter(w => w.start >= cue.start)) : null;
+        const token = tokens.find(t => t.index + t.text.length > offset) || tokens.at(-1);
+        const wordCue = token ? match(token.text, scoped.filter(w => w.start >= cue.start)) : null;
         offset += node.textContent.length;
         if (node.textContent.trim()) cache.set(node.parentElement, { text:node.textContent, cue:wordCue || cue });
       }

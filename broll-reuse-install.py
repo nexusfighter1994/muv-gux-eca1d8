@@ -1,18 +1,20 @@
 """Keep rendered B-roll video segments on retry/restart.
 
-Native o0s reuse check E() hashes the b_roll_video final_video input without the
-`verify` (footage text check, on by default) and `window`/`slow` fields that uBn
+Native P0s reuse check E() hashes the b_roll_video final_video input without the
+`verify` (footage text check, on by default) and `window`/`slow` fields that IBn
 really adds, so every rendered B-roll video looked stale on resume. The segment was
 rendered again and, because its selected_source input carries the whole segment DB
 row (bookkeeping columns change on every attempt), the stored pick was deleted and
 the B-roll searched and downloaded again (>50% of a video's segments on a retry).
 
-1. E() also accepts the exact inputs uBn builds for the same pick
+1. E() also accepts the exact inputs IBn builds for the same pick
    (__vfCustom.brollFinalReuse, node/broll-reuse.cjs).
 2. selected_source inputs (b_roll_video, composite_video) hash the planned segment
    content without the volatile bookkeeping columns (__vfCustom.stableSegmentInput).
 """
 import re
+import json
+from pathlib import Path
 
 MARKER = '/* vf-custom:broll-reuse-v1 */'
 STABLE = '/* vf-custom:broll-stable-input-v1 */'
@@ -28,7 +30,7 @@ def _one(pattern, text, what):
 def _reuse(text):
     head = _one(r"async function ([\w$]+)\(\{job:[\w$]+,slug:[\w$]+,chunkNumber:[\w$]+,segment:[\w$]+,videoBrief:[\w$]+,"
                 r"language:[\w$]+,usedBroll:[\w$]+,brollClaims:[\w$]+,generationSnapshot:[\w$]+=null,outputPath:[\w$]+=null,"
-                r"deps:[\w$]+=\{\}\}=\{\}\)\{if\(![\w$]+\)throw new Error\('brollVideo\.renderSegment", text, 'uBn')
+                r"deps:[\w$]+=\{\}\}=\{\}\)\{if\(![\w$]+\)throw new Error\('brollVideo\.renderSegment", text, 'IBn')
     render = head.group(1)
     body = text[head.start():head.start() + 30000]
     fit = _one(r'let [\w$]+=([\w$]+)\([\w$]+,[\w$]+,\{allowSlow:[\w$]+\}\),[\w$]+=![\w$]+&&Array\.isArray', body, 'fit plan').group(1)
@@ -49,7 +51,7 @@ def _reuse(text):
 def _stable(text):
     head = _one(r"async function [\w$]+\(\{job:[\w$]+,slug:[\w$]+,chunkNumber:[\w$]+,segment:[\w$]+,videoBrief:[\w$]+,"
                 r"language:[\w$]+,usedBroll:[\w$]+,brollClaims:[\w$]+,generationSnapshot:[\w$]+=null,outputPath:[\w$]+=null,"
-                r"deps:[\w$]+=\{\}\}=\{\}\)\{if\(![\w$]+\)throw new Error\('brollVideo\.renderSegment", text, 'uBn')
+                r"deps:[\w$]+=\{\}\}=\{\}\)\{if\(![\w$]+\)throw new Error\('brollVideo\.renderSegment", text, 'IBn')
     start = head.start()
     body = text[start:start + 30000]
     rest = _one(r'\{revision_no:[\w$]+,selected_revision_id:[\w$]+,\.\.\.([\w$]+)\}=[\w$]+', body, 'b-roll segment rest').group(1)
@@ -64,6 +66,12 @@ def _stable(text):
 
 
 def patch_node(text):
+    contract_path = Path(__file__).with_name('native-retirements.json')
+    if contract_path.exists():
+        contract = json.loads(contract_path.read_text())['broll']
+        required = [*contract['functions'].values(), *contract['needles']]
+        if all(text.count(item) == 1 for item in required):
+            return text
     if MARKER in text or STABLE in text:
         if text.count(MARKER) != 1 or text.count(STABLE) != 1:
             raise RuntimeError('Required B-roll reuse hook duplicated or partial')

@@ -35,6 +35,9 @@ MODULES = (
     "stream-compat.mjs", "thumbnail-openlux.mjs", "thumbnail-subject-identity.cjs",
     "bounded-safe-join.cjs", "validate-copy.cjs", "long-assembly.cjs",
     "home-camera.mjs", "home-camera-cli.mjs", "home-scenes.mjs",
+    "home-motion-dispatch.cjs",
+    "home-motion-recovery-order.cjs",
+    "home-chunk-recovery.cjs", "fflow-resubmit.cjs",
 )
 EXTERNAL_JS = (
     BUNDLE,

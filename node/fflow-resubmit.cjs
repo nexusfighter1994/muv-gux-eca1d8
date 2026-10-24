@@ -1,14 +1,14 @@
 'use strict';
-// A transient Home-fallback admission failure inside FFlow ("Native Home fallback
-// POST retry exhausted" etc.) must never fail a chunk/pipeline. While the caller is
-// still polling (same native lease, same Home scope), the identical FFlow request is
-// submitted again; the caller keeps polling its original job id, transparently
-// aliased to the newest attempt. Every other failure is returned unchanged.
+// Bounded transient retries for non-chunk FFlow operations with a live owner and
+// sufficient polling budget. Chunk compositions hand back to native admission
+// instead; replaying their Home scope can create an orphan at the poll deadline.
 
 const TRANSIENT = /Native Home fallback (?:(?:POST|GET|DELETE) retry exhausted|admission (?:unavailable|timed out|failed)|permit (?:unavailable|is not active)|renewal (?:lost|stopped))/;
 const JOB_PATH = /^\/v1\/jobs\/([^/?#]+)/;
+const {mayResubmit}=require('./home-chunk-recovery.cjs');
 
 function failureText(data) {
+  if (globalThis.__vfHomeQueueEnabled === false) return '';
   try { return JSON.stringify([data?.error ?? null, data?.message ?? null, data?.result?.error ?? null]); } catch { return ''; }
 }
 
@@ -44,9 +44,24 @@ function createResubmitter(original, { maxResubmits = 3, delayMs = 5000, sleep =
     const data = response.data;
     if (data.status === 'failed' && TRANSIENT.test(failureText(data))) {
       const used = attempts.get(root) || 0, submission = submissions.get(current || root);
-      if (submission && used < maxResubmits) {
+      if (submission && used < maxResubmits && mayResubmit()) {
+        // Saved-work recovery can poll an old job under a different native lease.
+        // Never replay its retired Home routing marker; let native recovery replace it.
+        const output = submission.options?.body?.output;
+        const filename = typeof output === 'string' ? output.split('/').pop() : output?.filename;
+        const scope = /^vfhome-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.mp4$/i.exec(filename || '');
+        const stillOwned = () => {
+          if (!scope) return true;
+          try {
+            const lease = globalThis.__vfHomeContext?.()?.leases?.get('ffmpeg')?.boosted;
+            return lease?.jobId === scope[1] && lease?.nonce === scope[2]
+              && globalThis.__vfHomeQueue?.validScope(lease) === true;
+          } catch { return false; }
+        };
+        if (!stillOwned() || !mayResubmit()) return current ? { ...response, data: { ...data, job_id: root } } : response;
         attempts.set(root, used + 1);
         await sleep(delayMs * (used + 1));
+        if (!stillOwned() || !mayResubmit()) return current ? { ...response, data: { ...data, job_id: root } } : response;
         const again = await Reflect.apply(original, this, [submission.path, submission.options]);
         const next = again?.data?.job_id || again?.job_id;
         if (typeof next === 'string' && next) {

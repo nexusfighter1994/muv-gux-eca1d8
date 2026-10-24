@@ -1,0 +1,77 @@
+[
+  {
+    "family": "scenes",
+    "sha256": "d834cb268ba773c4d95127d154bddb3f6bdcc9db776f044fffedc9bcb0781be2",
+    "body": "()=>k.run(\"fflow scenes/detect\",async Ne=>{let Rt=Mre(),Je=await Y4t({localPath:X.localPath,sourceUrl:ne}),ht=await N({sourceUrl:Je,localVideoUrl:Je,durationSec:o||X.durationSec||0,...v?{minShotSec:l5t(o||X.durationSec||0)}:{},deadlineTs:Ne,publishFile:U?(hr,Le)=>U.publish(hr,Le):void 0,signal:I,...Rt?{includeThumbnailData:!0}:{}});return Rt?{...ht,shots:await X_n(ht.shots)}:ht})"
+  },
+  {
+    "family": "siglip",
+    "sha256": "70e712dcaa0a02c37c70f79345af90a6623685ba17306fa08caf3c93e69abb1f",
+    "body": "()=>k.runSeparate(\"siglip embed/rank\",J4t(),Ne=>M({query:t,...F?{extraQueries:[...Array.isArray(y)?y:[],r].filter(Boolean),negativeQueries:gxe(yWe,E)}:E?.lookAlikes?.length?{negativeQueries:gxe([],E)}:{},shots:ce,deadlineTs:Ne,signal:I}))"
+  },
+  {
+    "family": "siglip",
+    "sha256": "02cfec4cbecf7d9e499d07fad680130f39bb5faf165e7733c070a91ea0ec421f",
+    "body": "()=>(s.embedAndRank||I9)({query:Ne[0]||b,extraQueries:[...Ne.slice(1),b].filter(Boolean),negativeQueries:gxe(yWe,g),shots:Tn.map(Ra=>({shot_id:Ra.index,start_sec:0,end_sec:0,duration_sec:0,thumbnail_url:Ra.thumbnailUrl})),deadlineTs:Date.now()+3e4})"
+  },
+  {
+    "family": "siglip",
+    "sha256": "96e4f095ac85339ad9074a0f9ee3b62a64fba1ebe5f19a52a40496241f4428cf",
+    "body": "()=>(s.embedAndRank||I9)({query:We,extraQueries:[...Le.slice(1),...ht,b].filter(Boolean),negativeQueries:gxe(se?yWe:[],g),shots:Dn,deadlineTs:Date.now()+12e4})"
+  },
+  {
+    "family": "library-trim",
+    "sha256": "6b465a047add572fd16b8400157b0c6b04d3e9a8f77c69a9a46c715dc7ef6aaf",
+    "body": "async()=>{let ro=await Y4t({sourceUrl:Lr.entry.sourceUrl});return zn({sourceUrl:ro,localVideoUrl:ro,videoFps:Lr.entry.videoFps,startSec:Lr.start_sec,endSec:Lr.end_sec,targetPath:Ck.join(Vr,`library-${Lr.shot_id}.mp4`),deadlineTs:Date.now()+Tp})}"
+  },
+  {
+    "family": "media",
+    "sha256": "e97e4a349fd5b66d269bcb81ea0d82269986e7234172fd0c0a88bd4ea4aee588",
+    "body": "()=>x($,{...L,signal:c})"
+  },
+  {
+    "family": "motion-direct",
+    "sha256": "4080b49af5c5073c203e3fd9ab4236a58f072d4960162a4df3983b414f53c861",
+    "body": "()=>N.render($)"
+  },
+  {
+    "family": "media",
+    "sha256": "f08126427198cc02867cd53df2270e49f5fc41e21605169a84b6e81ca40510df",
+    "body": "()=>i(T,{signal:p})"
+  },
+  {
+    "family": "normalize",
+    "sha256": "d1c4fbac70bb6c4805e15425ae134e4aab0188831d3f71ce408af8e7a90d6951",
+    "body": "()=>u([\"-y\",\"-i\",e,\"-vf\",h,\"-map\",\"0:v:0\",\"-map\",\"0:a?\",\"-c:v\",\"libx264\",...x3(),\"-pix_fmt\",\"yuv420p\",\"-r\",\"24\",\"-c:a\",\"aac\",\"-b:a\",\"192k\",\"-t\",p.toFixed(3),\"-movflags\",\"+faststart\",\"-f\",\"mp4\",t],{timeoutMs:18e4})"
+  },
+  {
+    "family": "normalize",
+    "sha256": "a93ed0332bd9d6f2b13c8d39dc91aa6bfa460c6afd595c8535a157a2f11c37b5",
+    "body": "()=>a([\"-y\",\"-i\",e,\"-vf\",r,\"-map\",\"0:v:0\",\"-map\",\"0:a?\",\"-c:v\",\"libx264\",...x3(),\"-pix_fmt\",\"yuv420p\",\"-r\",\"24\",\"-c:a\",\"aac\",\"-b:a\",\"192k\",\"-t\",c.toFixed(3),\"-movflags\",\"+faststart\",t],{timeoutMs:18e4})"
+  },
+  {
+    "family": "camera",
+    "sha256": "75865c1cd4fdeb6e72253dc85d0fa6e3fea9f412ec809cda0bd8195dae82f744",
+    "body": "async()=>{if(Fs()){await aQn({imagePath:t,durationSeconds:r,targetPath:f,motion:p});return}await _Ke({fflowClient:c,pollJobFn:l,imagePath:t,durationSeconds:r,targetPath:f,checkpoint:i,motion:p})}"
+  },
+  {
+    "family": "camera",
+    "sha256": "1e8853ffad802f896849710d649b0dcee11380c30b9b3ed5721262d54f6194e9",
+    "body": "async()=>{let ie=te?Z:X;if(Fs()){ee=$,ne&&(ne={...ne,reason:\"mock render\"}),await aQn({imagePath:I.localPath,durationSeconds:n.duration_sec,targetPath:ie,motion:ee});return}let ce=()=>_Ke({fflowClient:d,pollJobFn:p,imagePath:I.localPath,durationSeconds:n.duration_sec,targetPath:ie,checkpoint:null,motion:$});if(!F?.id){await _Ke({fflowClient:d,pollJobFn:p,imagePath:I.localPath,durationSeconds:n.duration_sec,targetPath:ie,checkpoint:K,motion:ee});return}let fe=null;try{fe=await _Ke({fflowClient:d,pollJobFn:p,imagePath:I.localPath,durationSeconds:n.duration_sec,targetPath:ie,checkpoint:K,motion:H,treatmentPlan:F})}catch(he){De.warn({jobId:h,segmentId:n.id,treatment:F.id,error:String(he?.message||he).slice(0,200)},\"picture treatment render failed; rendering the plain motion\"),ne={id:F.id,applied:!1,reason:`render failed: ${String(he?.message||he).slice(0,120)}`},AE.rmSync(ie,{force:!0}),ee=$,await ce();return}let se=fe?.treatmentStatus;if(se&&se.treatment_applied===!1){De.warn({jobId:h,segmentId:n.id,treatment:F.id,reason:se.treatment_reason},\"fflow skipped the picture treatment; rendering the plain motion\"),ne={id:F.id,applied:!1,reason:se.treatment_reason||\"skipped by fflow\"},AE.rmSync(ie,{force:!0}),ee=$,await ce();return}ne={id:F.id,applied:!0}}"
+  },
+  {
+    "family": "motion-opaque",
+    "sha256": "32692424cc334f307b3908ff57da91d5b8cb9f7e4672412012ccbf35c22b331e",
+    "body": "async()=>{if(j3()){await _c(i,Math.max(Number(o)||.1,.1),{fps:v_e});return}await __vfMotion.render(t.render.bind(t),{jobId:r,licensedJobId:w8(),getScope:()=>S0e.getStore(),lane:YL(\"frameshift\"),checkAbort:()=>af.get(r)?.checkAbort?.(),isAborted:()=>e.isJobAborted(r),outerSignal:cl(),duration:o},{compositionHtml:w_e(n.html,o),assets:n.assets,fps:v_e,resolution:fWt,targetPath:i,workDir:s,timeoutMs:PWs,renderOnlyHtml:eBn(n.html)+mJe(c,{pacing:l})+(a?w7n({fps:v_e}):\"\")||void 0,...u?.workers?{workers:u.workers}:{},...u?.quality?{quality:u.quality}:{}})}"
+  },
+  {
+    "family": "media",
+    "sha256": "c4ab4cd16e61d27f32897bba299cc9e538cda3ca102c75ac35bd851696e7e04a",
+    "body": "()=>Ke([\"-y\",\"-i\",U,\"-filter:v\",\"hflip\",\"-c:v\",\"libx264\",\"-preset\",\"fast\",\"-crf\",\"18\",\"-an\",W])"
+  },
+  {
+    "family": "motion-direct",
+    "sha256": "7e0e036341e7fdbdf00de380a18da5097f0fffc06c22a1bb2df5892e04c28e19",
+    "body": "()=>d.render({...h,targetPath:t,workDir:s,timeoutMs:Number(n.timeoutMs)||1200*1e3})"
+  }
+]

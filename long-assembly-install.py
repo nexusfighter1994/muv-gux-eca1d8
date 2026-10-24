@@ -1,4 +1,4 @@
-"""Reviewed upstream function adapter; never import the application to install it."""
+"""Reviewed upstream function adapter; never import the application to install Ke."""
 import json
 import re
 from pathlib import Path
@@ -56,4 +56,4 @@ def patch_node(text):
         raise RuntimeError('Reviewed safe-join signature changed')
     replacement = original.replace(contract['oldGuard'], contract['newGuard'])
     text = text.replace(original, replacement)
-    return text + '\n' + MARKER + ';(()=>{Fgn=__vfCustom.createLongSafeJoin(Fgn,{probe:(a,o)=>GAt(a,o),run:(a,o)=>it(a,o)});__vfCustom.report("longAssembly",true)})();\n'
+    return text + '\n' + MARKER + ';(()=>{Kkn=__vfCustom.createLongSafeJoin(Kkn,{probe:(a,o)=>eSt(a,o),run:(a,o)=>Ke(a,o)});__vfCustom.report("longAssembly",true)})();\n'

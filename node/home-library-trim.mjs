@@ -1,5 +1,6 @@
 export function isHomeLibraryTrimCallback(callback){
   return [
+    'async()=>{let ro=await Y4t({sourceUrl:Lr.entry.sourceUrl});return zn({sourceUrl:ro,localVideoUrl:ro,videoFps:Lr.entry.videoFps,startSec:Lr.start_sec,endSec:Lr.end_sec,targetPath:Ck.join(Vr,`library-${Lr.shot_id}.mp4`),deadlineTs:Date.now()+Tp})}',
     '()=>Yn({sourceUrl:jr.entry.sourceUrl,localVideoUrl:jr.entry.sourceUrl,videoFps:jr.entry.videoFps,startSec:jr.start_sec,endSec:jr.end_sec,targetPath:AS.join(Wr,`library-${jr.shot_id}.mp4`),deadlineTs:Date.now()+lp})',
     '()=>Un({sourceUrl:$r.entry.sourceUrl,localVideoUrl:$r.entry.sourceUrl,videoFps:$r.entry.videoFps,startSec:$r.start_sec,endSec:$r.end_sec,targetPath:RS.join(qr,`library-${$r.shot_id}.mp4`),deadlineTs:Date.now()+up})',
   ].includes(String(callback));

@@ -41,6 +41,15 @@ test('Home can claim ordered work while all fourteen normal server slots are bus
   assert.equal(f.state.activeTotal,16,'temporary accounting restored');
 });
 
+test('counted native recovery cannot be claimed again by the Home dispatcher',async()=>{
+  const f=fixture();
+  f.state.waiters.push({jobId:'recovery',priority:'a',seq:1,resourceKey:'fflowComposition',homeKind:'native-recovery'},
+    {jobId:'normal',priority:'b',seq:2,resourceKey:'fflowComposition'});
+  await f.queue.drain();
+  assert.deepEqual(f.claimed.map(x=>x.waiter.jobId),['normal']);
+  assert.equal(f.state.waiters[0].jobId,'recovery');
+});
+
 test('duplicate drains and cancellations never claim the same waiter twice',async()=>{
   const f=fixture();
   f.state.waiters.push({jobId:'one',priority:'a',seq:1,resourceKey:'fflowComposition'},

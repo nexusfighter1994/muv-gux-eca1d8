@@ -1,0 +1,28 @@
+{
+  "release": "2026.10.22.12",
+  "broll": {
+    "functions": {
+      "t9t": "function t9t({best:e,durationSec:t,outputPath:r,creditAuthor:n,sourceWindow:o,verifyText:i}){return{best:e,durationSec:t,outputPath:r,creditAuthor:n,...o.extended||o.slowed?{window:{startSec:o.startSec,endSec:o.endSec}}:{},...o.slowed?{slow:o.slowFactor}:{},...i?{verify:w5s}:{}}}",
+      "r9t": "function r9t({segment:e,best:t,durationSec:r,outputPath:n,creditAuthor:o,textFilter:i}){let s=!Zzt(e)&&!vHn(e),a=UKe(t,r,{allowSlow:s}),c=!!i&&bHn()&&!qoe(t),l=Number(e?.revision_no)>0&&!!e?.selected_revision_id||!!MR(e,\"b_roll_video\");return(c&&l?[!0,!1]:[c]).map(d=>t9t({best:t,durationSec:r,outputPath:n,creditAuthor:o,sourceWindow:a,verifyText:d}))}",
+      "IKe": "function IKe(e){if(!e||typeof e!=\"object\")return e;let t={...e};for(let r of h4s)delete t[r];return t}"
+    },
+    "needles": [
+      "h4s=[\"status\",\"output_path\",\"error\",\"attempt_count\",\"fallback_count\",\"provider_outputs_json\",\"started_at\",\"completed_at\",\"updated_at\",\"revision_no\",\"selected_revision_id\"]",
+      "input:t9t({best:te,durationSec:z,outputPath:P,creditAuthor:L,sourceWindow:ne,verifyText:ee})",
+      ":r9t({segment:{...M,type:D},best:U,durationSec:W,outputPath:Y,creditAuthor:q,textFilter:u.footageTextFilter??Bl()})).some(te=>z.input_hash===hO(te))",
+      "A=Number(n.revision_no)||0,v=IKe(n)",
+      "operation:\"selected_source\",operationOrder:I,input:{segment:IKe(n),videoBrief:o,language:i"
+    ]
+  },
+  "retired": [
+    "segment wordSync persistence insertion",
+    "B-roll final checkpoint hash compatibility wrapper",
+    "B-roll volatile segment input wrapper",
+    "Empty working-directory age patch",
+    "FX output marker injection"
+  ],
+  "fxSources": {
+    "src/storage/local.py": "379c07bd3167f2c5ce2ec42905053e75f2cf231355c547b95e1ea1db6e4198cf",
+    "src/storage/minio.py": "ad12abf2246f740620264c691e9dcfad0b2cc63760eddc23627480d90b56f6a7"
+  }
+}

@@ -4,42 +4,42 @@ import re
 
 
 def patch_node(text):
-    marker='/* vf-custom:independent-home-queue-v5 */'
+    marker='/* vf-custom:independent-home-queue-k5 */'
     if marker in text:return patch_direct(text)
-    if 'function HPr(e,{jobId:t,priority:r,resourceKey:n,opKey:o,quality:i,signal:a})' in text:
+    if 'function hQr(e,{jobId:t,priority:r,resourceKey:n,opKey:o,quality:i,signal:s})' in text:
         return patch_current_node(text)
-    for previous in ('/* vf-custom:independent-home-queue-v1 */','/* vf-custom:independent-home-queue-v2 */','/* vf-custom:independent-home-queue-v3 */','/* vf-custom:independent-home-queue-v4 */'):
+    for previous in ('/* vf-custom:independent-home-queue-v1 */','/* vf-custom:independent-home-queue-v2 */','/* vf-custom:independent-home-queue-k3 */','/* vf-custom:independent-home-queue-v4 */'):
         if previous in text:text=text[:text.index(previous)]
-    head='function CBr(e,{jobId:t,priority:r,resourceKey:n,opKey:o,quality:i,signal:a})'
+    head='function r8r(e,{jobId:t,priority:r,resourceKey:n,opKey:o,quality:i,signal:a})'
     if head in text:
         if text.count(head)!=1:raise RuntimeError('Native waiter metadata fingerprint changed')
         text=text.replace(head,head.replace('signal:a})','signal:a,homeKind=null})'))
-        start=text.index('function CBr(');end=text.index('async function zfe(',start)
+        start=text.index('function r8r(');end=text.index('async function r0e(',start)
         body=text[start:end]
         if body.count('quality:i,queuedAtMs:')!=1:raise RuntimeError('Native waiter record changed')
         body=body.replace('quality:i,queuedAtMs:','quality:i,homeKind,queuedAtMs:')
         text=text[:start]+body+text[end:]
-    trim='deadlineTs:Ze,signal:kt}))),Ue=F?String(n||"")'
-    replacement='deadlineTs:Ze,signal:kt})),{homeKind:"video-trim",operation:"fflow-video-trim",signal:kt}),Ue=F?String(n||"")'
+    trim='deadlineTs:Ze,signal:kt}))),He=F?String(n||"")'
+    replacement='deadlineTs:Ze,signal:kt})),{homeKind:"video-trim",operation:"fflow-video-trim",signal:kt}),He=F?String(n||"")'
     if replacement not in text:
         if text.count(trim)!=1:raise RuntimeError('Exact native video-trim caller changed')
         text=text.replace(trim,replacement)
-    normalize='l.toFixed(3),"-movflags","+faststart",t],{timeoutMs:18e4})),!0}async function b$n('
-    normalize_new='l.toFixed(3),"-movflags","+faststart",t],{timeoutMs:18e4}),{homeKind:__vfCustom.canHomeNormalizeFilter(r)?"video-normalize":null,operation:"home-broll-normalize"}),!0}async function b$n('
+    normalize='l.toFixed(3),"-movflags","+faststart",t],{timeoutMs:18e4})),!0}async function RUn('
+    normalize_new='l.toFixed(3),"-movflags","+faststart",t],{timeoutMs:18e4}),{homeKind:__vfCustom.canHomeNormalizeFilter(r)?"video-normalize":null,operation:"home-broll-normalize"}),!0}async function RUn('
     if normalize_new not in text:
         if text.count(normalize)!=1:raise RuntimeError('Exact native bar-fill normalization changed')
         text=text.replace(normalize,normalize_new)
-    start=text.find('function zfe(')
+    start=text.find('function r0e(')
     end=text.find('async function ',start+15)
     if start<0 or end<start:raise RuntimeError('Home queue native run fingerprint changed')
     run=text[start:end]
     if (run.count('boosted:!!g?.boosted')+run.count('boosted:g?.homeScope||!!g?.boosted')!=1
-            or run.count('S=gBe({lane:i,resourceKey:o,')+
-            run.count('S=gBe({lane:i,resourceKey:b.boosted&&typeof b.boosted==="object"?"ffmpegHome":o,')!=1):
+            or run.count('S=F4e({lane:i,resourceKey:o,')+
+            run.count('S=F4e({lane:i,resourceKey:b.boosted&&typeof b.boosted==="object"?"ffmpegHome":o,')!=1):
         raise RuntimeError('Home queue lease or memory scope fingerprint changed')
     run=run.replace('boosted:!!g?.boosted','boosted:g?.homeScope||!!g?.boosted')
-    run=run.replace('S=gBe({lane:i,resourceKey:o,',
-        'S=gBe({lane:i,resourceKey:b.boosted&&typeof b.boosted==="object"?"ffmpegHome":o,')
+    run=run.replace('S=F4e({lane:i,resourceKey:o,',
+        'S=F4e({lane:i,resourceKey:b.boosted&&typeof b.boosted==="object"?"ffmpegHome":o,')
     run=run.replace('opKey:f.segmentType||null,quality:f.quality||null,signal:a})',
         'opKey:f.segmentType||null,quality:f.quality||null,signal:a,homeKind:f.homeKind||null})')
     text=text[:start]+run+text[end:]
@@ -47,16 +47,16 @@ def patch_node(text):
 
 
 def home_hook():
-    marker='/* vf-custom:independent-home-queue-v5 */'
+    marker='/* vf-custom:independent-home-queue-k5 */'
     return (marker+";(()=>{if(!(__vfCustom.modEnabled('homeQueue')&&__vfCustom.modEnabled('homeFfmpeg'))&&!__vfCustom.modEnabled('homeSiglip'))return;let timer;const connect=()=>{if(!globalThis.__vfCustomApp)return;"
-          'try{k7=__vfCustom.wrapHomeRamEstimate(k7);__vfCustom.installHomeAdmission({scheduler:Me,getState:()=>WY("ffmpeg"),'
-          'getContext:()=>mBe.getStore(),claim:w=>Kmi("ffmpeg",WY("ffmpeg"),w),'
-          'runIndependent:fn=>__vfCustom.withoutHomeFfmpegLane(()=>mBe.getStore(),(context,run)=>mBe.run(context,run),fn),'
-          'getAdmission:()=>bBe,setAdmission:v=>{bBe=v},getRelease:()=>TBr,setRelease:v=>{TBr=v},'
+          'try{k7=__vfCustom.wrapHomeRamEstimate(k7);__vfCustom.installHomeAdmission({scheduler:Oe,getState:()=>bJ("ffmpeg"),'
+          'getContext:()=>P4e.getStore(),claim:w=>QCi("ffmpeg",bJ("ffmpeg"),w),'
+          'runIndependent:fn=>__vfCustom.withoutHomeFfmpegLane(()=>P4e.getStore(),(context,run)=>P4e.run(context,run),fn),'
+          'getAdmission:()=>B4e,setAdmission:v=>{B4e=v},getRelease:()=>t8r,setRelease:v=>{t8r=v},'
           'app:globalThis.__vfCustomApp,requireOwner:globalThis.__vfCustomOwner});'
-          '__vfCustom.wrapHomeFflowClient(co,()=>mBe.getStore());'
+          '__vfCustom.wrapHomeFflowClient(co,()=>P4e.getStore());'
           'const nativeExec=oAt;oAt=__vfCustom.wrapHomeNormalizeExec(oAt,{' 
-          'getContext:()=>mBe.getStore(),getBinary:()=>IOr(),'
+          'getContext:()=>P4e.getStore(),getBinary:()=>Q6r(),'
           'runCli:async(payload,options)=>{const request=__vfCustom.nativeNormalizeRequest(payload);if(!request)return {offloaded:false};'
           'const result=await nativeExec("python",["-B","/app/engines/fflow/src/core/pc_node_normalize_cli.py",Buffer.from(JSON.stringify(request)).toString("base64")],'
           '{...options,timeoutMs:210000});return JSON.parse(result.stdout)},'
@@ -74,17 +74,17 @@ def patch_current_node(text):
             raise RuntimeError('Current Home hook fingerprint changed: ' + old[:100])
         text = text.replace(old, new, 1)
 
-    bindings = {'k7':'z7', 'WY':'pX', 'mBe':'fhe', 'Kmi':'pbi', 'bBe':'XBe',
-                'TBr':'QPr', 'co':'po', 'oAt':'qAt', 'IOr':'HDr', 'gBe':'YBe',
-                'cv':'pv', 'Iy':'Dy', 'ohn':'uhn'}
+    bindings = {'k7':'fK', 'bJ':'DJ', 'P4e':'S0e', 'QCi':'sNi', 'B4e':'A5e',
+                't8r':'Rkt', 'co':'Vn', 'oAt':'Z_t', 'Q6r':'mjr', 'F4e':'y5e',
+                'cv':'Qv', 'Iy':'Hg', 'F1n':'H1n'}
     signatures = [
-        'function z7({resourceKey:e,opKey:t=null,quality:r=null,jobId:n=null}={})',
-        'function pX(e){let t=AM.get(e);',
-        'function pbi(e,t,r,{boosted:n=!1}={})',
-        'function XBe(e,t,r,n=e,o=Axt(t))',
-        'async function QPr(e,t,r,n=e,o=!1)',
-        'function qAt(e,t,{timeoutMs:r=zAt,signal:n,chunkIndex:o,onSpawn:i}={})',
-        'function HDr(){return process.env.VIDFORGE_FFMPEG_PATH||"ffmpeg"}',
+        'function fK({resourceKey:e,opKey:t=null,quality:r=null,jobId:n=null}={})',
+        'function DJ(e){let t=j$.get(e);',
+        'function sNi(e,t,r,{boosted:n=!1}={})',
+        'function A5e(e,t,r,n=e,o=Ikt(t))',
+        'async function Rkt(e,t,r,n=e,o=!1)',
+        'function Z_t(e,t,{timeoutMs:r=J_t,signal:n,chunkIndex:o,onSpawn:i}={})',
+        'function mjr(){return process.env.VIDFORGE_FFMPEG_PATH||"ffmpeg"}',
     ]
     for signature in signatures:
         if text.count(signature) != 1:
@@ -92,21 +92,21 @@ def patch_current_node(text):
     embed = re.findall(r'async function ([\w$]+)\(\{query:e,extraQueries:t=\[\],negativeQueries:r=\[\],shots:n,deadlineTs:o,signal:i\}\)', text)
     if len(embed) != 1:
         raise RuntimeError('Current native embedder changed')
-    bindings['ohn'] = embed[0]
+    bindings['F1n'] = embed[0]
 
-    head='function HPr(e,{jobId:t,priority:r,resourceKey:n,opKey:o,quality:i,signal:a})'
-    replace_once(head, head.replace('signal:a})', 'signal:a,homeKind=null})'))
+    head='function hQr(e,{jobId:t,priority:r,resourceKey:n,opKey:o,quality:i,signal:s})'
+    replace_once(head, head.replace('signal:s})', 'signal:s,homeKind=null})'))
     replace_once('quality:i,queuedAtMs:', 'quality:i,homeKind,queuedAtMs:')
-    replace_once('deadlineTs:Ye,signal:St}))),',
-                 'deadlineTs:Ye,signal:St})),{homeKind:"video-trim",operation:"fflow-video-trim",signal:St}),')
-    old='l.toFixed(3),"-movflags","+faststart",t],{timeoutMs:18e4})),!0}async function xDn('
-    replace_once(old, 'l.toFixed(3),"-movflags","+faststart",t],{timeoutMs:18e4}),{homeKind:__vfCustom.canHomeNormalizeFilter(r)?"video-normalize":null,operation:"home-broll-normalize"}),!0}async function xDn(')
-    replace_once('boosted:!!b?.boosted,cooldownProbe:!!b?.cooldownProbe',
-                 'boosted:b?.homeScope||!!b?.boosted,cooldownProbe:!!b?.cooldownProbe')
-    replace_once('T=YBe({lane:i,resourceKey:o,',
-                 'T=YBe({lane:i,resourceKey:y.boosted&&typeof y.boosted==="object"?"ffmpegHome":o,')
-    replace_once('opKey:h.segmentType||null,quality:h.quality||null,signal:a}),y={lane:',
-                 'opKey:h.segmentType||null,quality:h.quality||null,signal:a,homeKind:h.homeKind||null}),y={lane:')
+    replace_once('deadlineTs:Je,signal:Rt})}))),',
+                 'deadlineTs:Je,signal:Rt})}),{homeKind:"video-trim",operation:"fflow-video-trim",signal:Rt})),')
+    old='c.toFixed(3),"-movflags","+faststart",t],{timeoutMs:18e4})),!0}async function N8n('
+    replace_once(old, 'c.toFixed(3),"-movflags","+faststart",t],{timeoutMs:18e4}),{homeKind:__vfCustom.canHomeNormalizeFilter(r)?"video-normalize":null,operation:"home-broll-normalize"}),!0}async function N8n(')
+    replace_once('boosted:!!y?.boosted,cooldownProbe:!!y?.cooldownProbe',
+                 'boosted:y?.homeScope||!!y?.boosted,cooldownProbe:!!y?.cooldownProbe')
+    replace_once('C=y5e({lane:s,resourceKey:i,',
+                 'C=y5e({lane:s,resourceKey:A.boosted&&typeof A.boosted==="object"?"ffmpegHome":i,')
+    replace_once('opKey:m.segmentType||null,quality:m.quality||null,signal:a}),A={lane:',
+                 'opKey:m.segmentType||null,quality:m.quality||null,signal:a,homeKind:m.homeKind||null}),A={lane:')
     # Only translate identifiers in our generated hook, never in native code.
     hook = patch_direct(home_hook())
     hook = re.sub(r'\b(?:' + '|'.join(map(re.escape, bindings)) + r')\b',
@@ -117,13 +117,13 @@ def patch_current_node(text):
 def patch_direct(text):
     marker='/* vf-custom:home-direct-credit-v1 */'
     if marker in text:return patch_library_trim(text)
-    anchor='__vfCustom.wrapHomeFflowClient(co,()=>mBe.getStore());'
+    anchor='__vfCustom.wrapHomeFflowClient(co,()=>P4e.getStore());'
     if text.count(anchor)!=1:raise RuntimeError('Home direct installer fingerprint changed')
-    hook=(marker+'__vfCustom.installHomeDirect({scheduler:Me,getSlotMeasurer:()=>gBe,'
-          'setSlotMeasurer:v=>{gBe=v},getContext:()=>mBe.getStore(),'
-          'runNativeContext:(scope,fn)=>{const c=mBe.getStore(),old=c?.leases?.get("ffmpeg");'
+    hook=(marker+'__vfCustom.installHomeDirect({scheduler:Oe,getSlotMeasurer:()=>F4e,'
+          'setSlotMeasurer:v=>{F4e=v},getContext:()=>P4e.getStore(),'
+          'runNativeContext:(scope,fn)=>{const c=P4e.getStore(),old=c?.leases?.get("ffmpeg");'
           'if(!c||old?.boosted?.nonce!==scope.nonce)throw Error("Native recovery scope mismatch");'
-          'const leases=new Map(c.leases);leases.set("ffmpeg",{...old,boosted:false});return mBe.run({...c,leases},fn)},'
+          'const leases=new Map(c.leases);leases.set("ffmpeg",{...old,boosted:false});return P4e.run({...c,leases},fn)},'
           'runRecovery:(scope,fn,signal)=>globalThis.__vfHomeQueue.runRecovery(scope,fn,signal)});')
     return patch_library_trim(text.replace(anchor,anchor+hook))
 
@@ -133,26 +133,26 @@ def patch_library_trim(text):
     if marker in text:return patch_home_siglip(text)
     anchor='runRecovery:(scope,fn,signal)=>globalThis.__vfHomeQueue.runRecovery(scope,fn,signal)});'
     if text.count(anchor)!=1:raise RuntimeError('Native direct installation boundary changed')
-    hook=(marker+'__vfCustom.installHomeLibraryTrim({scheduler:Me,getSlotMeasurer:()=>gBe,'
-          'setSlotMeasurer:v=>{gBe=v},getContext:()=>mBe.getStore()});')
+    hook=(marker+'__vfCustom.installHomeLibraryTrim({scheduler:Oe,getSlotMeasurer:()=>F4e,'
+          'setSlotMeasurer:v=>{F4e=v},getContext:()=>P4e.getStore()});')
     return patch_home_siglip(text.replace(anchor,anchor+hook))
 
 
 def patch_home_siglip(text):
     marker='/* vf-custom:home-siglip-admission-v1 */'
     if marker in text:return text
-    anchor='__vfCustom.installHomeLibraryTrim({scheduler:Me,getSlotMeasurer:()=>gBe,setSlotMeasurer:v=>{gBe=v},getContext:()=>mBe.getStore()});'
+    anchor='__vfCustom.installHomeLibraryTrim({scheduler:Oe,getSlotMeasurer:()=>F4e,setSlotMeasurer:v=>{F4e=v},getContext:()=>P4e.getStore()});'
     if text.count(anchor)!=1:raise RuntimeError('Home SigLIP native hook boundary changed')
-    hook=(marker+'__vfCustom.installHomeSiglipStartup({scheduler:Me,getState:()=>WY("siglip"),'
-      'getContext:()=>mBe.getStore(),claim:w=>{const c=cv.get("siglip"),p=c?.probing;Kmi("siglip",WY("siglip"),w);if(c&&cv.get("siglip")===c)c.probing=p},'
-      'getAdmission:()=>bBe,setAdmission:v=>{bBe=v},getRelease:()=>TBr,setRelease:v=>{TBr=v},'
-      'getSlotMeasurer:()=>gBe,setSlotMeasurer:v=>{gBe=v},'
-      'runIndependent:fn=>{const c=mBe.getStore();if(!c)return fn();const lanes=new Set(c.lanes||[]),leases=new Map(c.leases||[]);'
-      'lanes.delete("siglip");leases.delete("siglip");return mBe.run({...c,lanes,leases},fn)},'
-      'runNativeContext:(scope,fn)=>{const c=mBe.getStore(),old=c?.leases?.get("siglip");'
+    hook=(marker+'__vfCustom.installHomeSiglipStartup({scheduler:Oe,getState:()=>bJ("siglip"),'
+      'getContext:()=>P4e.getStore(),claim:w=>{const c=cv.get("siglip"),p=c?.probing;QCi("siglip",bJ("siglip"),w);if(c&&cv.get("siglip")===c)c.probing=p},'
+      'getAdmission:()=>B4e,setAdmission:v=>{B4e=v},getRelease:()=>t8r,setRelease:v=>{t8r=v},'
+      'getSlotMeasurer:()=>F4e,setSlotMeasurer:v=>{F4e=v},'
+      'runIndependent:fn=>{const c=P4e.getStore();if(!c)return fn();const lanes=new Set(c.lanes||[]),leases=new Map(c.leases||[]);'
+      'lanes.delete("siglip");leases.delete("siglip");return P4e.run({...c,lanes,leases},fn)},'
+      'runNativeContext:(scope,fn)=>{const c=P4e.getStore(),old=c?.leases?.get("siglip");'
       'if(!c||old?.boosted?.nonce!==scope.nonce)throw Error("Native SigLIP recovery scope mismatch");'
-      'const leases=new Map(c.leases);leases.set("siglip",{...old,boosted:false});return mBe.run({...c,leases,homeSiglipRecovery:true},fn)},'
-      'getClient:()=>Iy,getFflow:()=>co,getEmbedder:()=>ohn,setEmbedder:v=>{ohn=v},app:globalThis.__vfCustomApp,requireOwner:globalThis.__vfCustomOwner});')
+      'const leases=new Map(c.leases);leases.set("siglip",{...old,boosted:false});return P4e.run({...c,leases,homeSiglipRecovery:true},fn)},'
+      'getClient:()=>Iy,getFflow:()=>co,getEmbedder:()=>F1n,setEmbedder:v=>{F1n=v},app:globalThis.__vfCustomApp,requireOwner:globalThis.__vfCustomOwner});')
     return text.replace(anchor,anchor+hook)
 
 

@@ -10,10 +10,10 @@ from pathlib import Path
 import sys
 
 
-CONTRACT_VERSION = "vf-custom-40-20261015"
+CONTRACT_VERSION = "vf-custom-41-20261023"
 REQUIRED_HOOKS = (
     "fflow.ffmpegOffload",
-    "fflow.fxOutputSentinel",
+    "fflow.nativeFxDirectoryProtection",
     "fflow.homeQueue",
     "fflow.sceneOffload",
     "fflow.slotCleanup",
@@ -29,6 +29,7 @@ REQUIRED_HOOKS = (
     "node.geomapIsolation",
     "node.gpuRenderEvents",
     "node.homeQueue",
+    "node.chunkPollRecovery",
     "node.homeMap",
     "node.homeMotion",
     "node.lane",

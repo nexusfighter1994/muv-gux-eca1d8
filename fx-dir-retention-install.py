@@ -89,6 +89,12 @@ def patch_source(text, backend):
 
 def install(root, *, apply=False):
     root = Path(root).resolve(strict=True)
+    contract_path = Path(__file__).with_name('native-retirements.json')
+    if contract_path.exists():
+        expected = json.loads(contract_path.read_text()).get('fxSources', {})
+        if expected and all(hashlib.sha256((root / name).read_bytes()).hexdigest() == digest
+                            for name, digest in expected.items()):
+            return {'mode': 'native', 'root': str(root), 'changed': [], 'nativeReplacement': True}
     plans = []
     # Validate both complete native contracts before staging or replacing either file.
     for backend in CONTRACTS:

@@ -1,5 +1,13 @@
 # VidForge Custom Layer Update Gate
 
+Current release: see `../RELEASE-20261024.md`. The current base digest is
+`sha256:4c26a7fe069c3b3b4b5898d0782890996ec1a0f1eb5e7abe4aa5a973704c58b3`,
+native health version `2026.10.22.12`, contract `vf-custom-41-20261023`.
+The gate requires 41 checks plus exact Home/SigLIP callback verification.
+Reviewed native FX directory protection
+replaces the retired marker injection. The older 34-hook release contract
+below documents the initial October 15 gate and is historical.
+
 This directory is sidecar tooling only. It does not deploy, edit compose, change
 canonical source, contact providers, or mutate the production queue/database.
 The parent owns integration into `context/apply.py` and `context/Dockerfile`.

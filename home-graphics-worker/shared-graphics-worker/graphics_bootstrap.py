@@ -75,7 +75,13 @@ class Graphics:
             service.render = counted
 
     def health(self):
-        with self.lock: return dict(self.counts, graphicsBusy=int(self.active), graphicsCapacity=getattr(self.motion, 'slots', 1))
+        motion, maps = self.motion.health(), self.maps.health()
+        with self.lock:
+            return dict(self.counts, graphicsBusy=int(self.active), graphicsCapacity=getattr(self.motion, 'slots', 1),
+                        graphicsRecoveryVersion=2,
+                        graphicsQuarantined=motion['quarantinedJobs'] + maps['quarantinedJobs'],
+                        graphicsRecovered=motion['recoveredJobs'] + maps['recoveredJobs'],
+                        graphicsActiveJobs=motion['activeJobs'] + maps['activeJobs'])
 
     def dispatch(self, handler, down, up):
         original = handler.path

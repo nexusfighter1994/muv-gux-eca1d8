@@ -1,9 +1,9 @@
 // Exact 2026-10-18 native callbacks. Opaque overlay wrappers also serve probes;
 // these are admission candidates only: argv MUST qualify before any offload.
 const CALLBACKS = new Map([
-  ['()=>x(D,{...$,signal:l})', 'composite-overlay'],
+  ['()=>x($,{...L,signal:c})', 'composite-overlay'],
   ['()=>i(T,{signal:p})', 'composite-overlay'],
-  ['()=>it(["-y","-i",j,"-filter:v","hflip","-c:v","libx264","-preset","fast","-crf","18","-an",Y])', 'video-mirror'],
+  ['()=>Ke(["-y","-i",U,"-filter:v","hflip","-c:v","libx264","-preset","fast","-crf","18","-an",W])', 'video-mirror'],
 ]);
 
 export function classifyHomeMediaCallback(callback) {

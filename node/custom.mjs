@@ -26,6 +26,7 @@ import finalHash from './final-hash.cjs';
 import renderMemoryFairness from './render-memory-fairness.cjs';
 import schedulerHotpath from './scheduler-hotpath.cjs';
 import homeRemote from './home-graphics/remote-active.cjs';
+import homeMotionDispatch from './home-motion-dispatch.cjs';
 import runpodBurst from './runpod/burst-controller.cjs';
 import jobPriority from './job-priority.cjs';
 import fflowResubmit from './fflow-resubmit.cjs';
@@ -96,6 +97,11 @@ export function installFrameshiftRoute(native) {
   installRunpodBurst();
   return (globalThis.__vfFrameshiftRoute = route);
 }
+export function installHomeMotionAdmission(native) {
+  if (!modEnabled('homeMotion')) return null;
+  return homeMotionDispatch.install({...native,remote:homeRemote,
+    getSettings:()=>getMotionConfiguration()?.getSettings?.()});
+}
 // RunPod GPU burst (PC Boost settings burst*): rents one pod while many frameshift renders wait.
 export function installRunpodBurst() {
   if (globalThis.__vfBurst) return globalThis.__vfBurst;
@@ -110,7 +116,10 @@ export function installJobPriority(native) {
 }
 export function wrapRenderMemoryGate(original, getState) { return modEnabled('mapAdmission') ? renderMemoryFairness.createRenderMemoryFairness(original, { getState }) : original; }
 export function wrapFfmpegAdmissionCheck(original, ...args) { return modEnabled('ffmpegAdmission') ? _wrapFfmpegAdmissionCheck(original, ...args) : original; }
-export function installGpuRenderEvents(...args) { if (modEnabled('gpuEvents')) return _installGpuRenderEvents(...args); }
+export function installGpuRenderEvents(...args) {
+  if (modEnabled('homeMotion')) process.getBuiltinModule('module').createRequire(import.meta.url)('./home-motion-events.cjs').install(args[0]);
+  if (modEnabled('gpuEvents')) return _installGpuRenderEvents(...args);
+}
 const homeQueueEnabled = () => modEnabled('homeQueue') && modEnabled('homeFfmpeg');
 export function installHomeAdmission(...args) { if (homeQueueEnabled()) return _installHomeAdmission(...args); }
 export function wrapHomeFflowClient(original, ...args) { return homeQueueEnabled() ? _wrapHomeFflowClient(original, ...args) : original; }

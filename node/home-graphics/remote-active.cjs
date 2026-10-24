@@ -40,6 +40,8 @@ function lowerAllocation(resource) {
 
 function begin(resource = 'frameshift') {
   if (typeof resource !== 'string' || !resource) throw new TypeError('resource required');
+  // Independent Motion already removes its Home lease from native admission.
+  if (resource === 'frameshift' && globalThis.__vfHomeMotionQueue?.ownsCurrent()) return () => {};
   let open = true;
   let restore = null;
   try { restore = lowerAllocation(resource); } catch { restore = null; }

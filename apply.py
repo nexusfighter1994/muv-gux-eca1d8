@@ -123,10 +123,11 @@ FFMPEG_HOOK = '''        # vf-custom: optional authenticated home-PC executor (e
 
 
 def fflow():
-    _fx_retention_install.install(CORE.parent.parent, apply=True)
+    retention = _fx_retention_install.install(CORE.parent.parent, apply=True)
     note('fflow.tempDirectoryRetention', True)
-    _fx_sentinel_install.install(CORE.parent.parent, apply=True)
-    note('fflow.fxOutputSentinel', True)
+    if not retention.get('nativeReplacement'):
+        raise RuntimeError('Reviewed native FX directory protection is required by this release')
+    note('fflow.nativeFxDirectoryProtection', True)
     for name in ('mod_flags.py', 'mod_boot.py', 'pc_ffmpeg_protocol.py', 'pc_transfer_limits.py', 'pc_ffmpeg_hook.py', 'pc_scene_hook.py', 'ffmpeg_slot_cleanup.py', 'pc_home_queue.py', 'pc_home_pool.py', 'pc_node_normalize_cli.py', 'pc_node_media_cli.py', 'pc_node_media_recipes.py', 'pc_scene_graphics_cli.py', 'ffmpeg_duration_timeout.py'):
         shutil.copy2(HERE / 'fflow' / name, CORE / name)
     for file, patch in ((CORE.parent / 'queue' / 'jobs.py', _home_install.patch_jobs),
@@ -240,7 +241,7 @@ def geomap_isolation():
     text, crlf = read(target)
     marker = '/* vf-custom:geomap-isolation */'
     if marker not in text:
-        signature = 'export function render({ animationType, params, targetPath, mapboxToken, onProgress, signal, onPhase, look, language, engine }) {'
+        signature = 'export function render({ animationType, params, targetPath, onProgress, signal, onPhase, look, language }) {'
         if text.count(signature) != 1:
             raise RuntimeError('Required GeoMap render signature changed')
         text = text.replace(signature, signature.replace('export function render(', 'function renderInProcess('), 1)
@@ -249,7 +250,7 @@ import isolatedMaps from './geomap-isolated.cjs';
 import { modEnabled } from '../../server/dist/vf-custom/mod-controls.mjs';
 const isolatedRender = isolatedMaps.createIsolatedMapRenderer();
 export function render(options) {
-  return process.env.VIDFORGE_GEOMAP_ISOLATED_CHILD === '1' || !modEnabled('mapIsolation') || (options.engine || activeEngine()) === 'mapbox'
+  return process.env.VIDFORGE_GEOMAP_ISOLATED_CHILD === '1' || !modEnabled('mapIsolation')
     ? renderInProcess(options) : isolatedRender(options);
 }
 render.isolationVersion = 'cartograph-process-v1';
@@ -452,7 +453,7 @@ def ai33_stt_response(text):
     if anchor < 0 or start < 0 or end < 0:
         raise RuntimeError('Required AI33 STT response fingerprint missing')
     pattern = re.compile(
-        r'let [\w$]+=String\(([\w$]+)\?\.text\?\?""\),[\w$]+=[\w$]+\(\1\?\.words\);'
+        r'let [\w$]+=String\(([\w$]+)\?\.text\?\?""\),[\w$]+=[\w$]+\(\1\?\.words(?:,[\w$]+)?\);'
     )
     matches = list(pattern.finditer(text, start, end))
     if len(matches) != 1:
@@ -497,6 +498,8 @@ def node():
         text = _media_install.patch_node(text)
         text = runpy.run_path(str(HERE / 'home-camera-install.py'))['patch_node'](text)
         text = runpy.run_path(str(HERE / 'home-scenes-install.py'))['patch_node'](text)
+        text = runpy.run_path(str(HERE / 'chunk-poll-install.py'))['patch_node'](text)
+        note('node.chunkPollRecovery', True)
         note('node.homeQueue', True)
         write(bundle, text, crlf)
         note('node.bundle', True, 'already patched')
@@ -585,7 +588,7 @@ def node():
     m = pin.search(text)
     vid = None
     if m:
-        vids = list(re.finditer(r'let ([\w$]+)=[\w$]+\.some\(\$=>\$\?\.mediaType==="video"', text[max(0, m.start() - 3000):m.start()]))
+        vids = list(re.finditer(r'(?:let |,)([\w$]+)=[\w$]+\.some\(([\w$]+)=>\2\?\.mediaType==="video"', text[max(0, m.start() - 5000):m.start()]))
         vid = vids[-1].group(1) if vids else None
     if len(hits) == 1 and vid:
         w, route, chain = m.group(1), m.group(2), m.group(3)
@@ -676,6 +679,8 @@ def node():
         note('node.siglipPc', False, 'SigLIP or FFlow client fingerprint missing')
     tail.append('})();\n')
     text = long_assembly(_home_install.patch_node(gpu_render_events(ffmpeg_admission(ai33_stt_response(map_admission(stream_compat(fish_free(thumbnail_identity(thumbnail_openlux(sourcing_deadline(text + ''.join(tail))))))))))))
+    text = runpy.run_path(str(HERE / 'chunk-poll-install.py'))['patch_node'](text)
+    note('node.chunkPollRecovery', True)
     note('node.homeQueue', True)
     text = _memory_install.patch_node(text)
     text = _fs_limit_install.patch_node(text)
@@ -721,8 +726,8 @@ def ui():
     text, crlf = read(index)
     if MARK not in text and '</head>' in text:
         tags = ('    <!-- vf-custom -->\n'
-                '    <link rel="stylesheet" href="/assets/pc-boost-settings-20261002.css?v=explain-20261017a">\n'
-                '    <script type="module" src="/assets/pc-boost-settings-20261002.js?v=home-scenes-20261018a"></script>\n'
+                '    <link rel="stylesheet" href="/assets/pc-boost-settings-20261002.css?v=motion-queue-20261019a">\n'
+                '    <script type="module" src="/assets/pc-boost-settings-20261002.js?v=motion-queue-20261019a"></script>\n'
                 '    <link rel="stylesheet" href="/assets/pc-transfer-settings-20261011.css?v=size-20261011b">\n'
                 '    <script type="module" src="/assets/pc-transfer-settings-20261011.js?v=size-nvenc-20261013a"></script>\n'
                 '    <script type="module" src="/assets/vf-custom-tab.js?v=vfc1"></script>\n')
@@ -734,7 +739,7 @@ def ui():
             for extension in ('js', 'css'):
                 text = re.sub(
                     rf'(/assets/pc-boost-settings-20261002\.{extension})\?v=[^"\s]+',
-                    r'\1?v=home-scenes-20261018a' if extension == 'js' else r'\1?v=explain-20261017a', text)
+                    r'\1?v=motion-queue-20261019a', text)
             additions = ''
             for extension in ('js', 'css'):
                 text = re.sub(

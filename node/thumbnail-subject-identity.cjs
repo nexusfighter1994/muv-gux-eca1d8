@@ -49,6 +49,16 @@ function updateWriterPrompt(prompt){
   output=output.slice(0,exampleStart)+'identity-layer element, naming the actual subject from the NEW video in full and explicitly\nreplacing any unrelated reference presenter. '+output.slice(exampleEnd);
   output=replaceOnce(output,'while STILL replacing every identity-layer element as required above.',
     'while applying the real-subject identity rules above.');
+  if(prompt.includes('Return 8-12 moments and exactly ')&&prompt.includes('"core_promise"')){
+    output=replaceOnce(output,
+      'Inherit the reference\'s layout, subject placement, text architecture, palette and lighting.',
+      'Respect the native variant rules: variant 1 inherits the reference layout; other variants\ninherit its style and retain the distinct composition required by their own script moment.');
+    output=replaceOnce(output,
+      "an explicit, named replacement for EVERY entry in the blueprint's scene_identity_elements that is in frame",
+      "an explicit identity decision for EVERY entry in the blueprint's scene_identity_elements that is in frame, keeping a reference person only if the NEW video requires that person");
+    return replaceOnce(output,'that no identity-layer element from the reference is carried over recognizably',
+      'that no unrelated identity-layer element from the reference is carried over recognizably');
+  }
   output=replaceOnce(output,'with the identity layer fully replaced (a different\nperson, a different environment, different secondary props)',
     'with the correct named subjects from the NEW video, a new environment and appropriate\nsecondary props');
   output=replaceOnce(output,'Give each variant a different subject or angle',

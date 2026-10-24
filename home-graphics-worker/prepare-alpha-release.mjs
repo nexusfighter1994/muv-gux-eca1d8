@@ -20,7 +20,7 @@ await fs.cp(baseRoot, releaseRoot, {recursive: true, dereference: false, force: 
 for (const name of ['worker.mjs', 'alpha-worker.mjs', 'alpha-hook.mjs', 'hook.mjs', 'binding.mjs']) {
   await fs.copyFile(path.join(canonical, 'node/home-graphics/motion-offload', name), path.join(releaseRoot, 'motion-offload', name));
 }
-for (const name of ['transport.py', 'adapter.py']) await fs.copyFile(path.join(here, 'motion-offload', name), path.join(releaseRoot, 'motion-offload', name));
+for (const name of ['transport.py', 'process_tree.py', 'adapter.py']) await fs.copyFile(path.join(here, 'motion-offload', name), path.join(releaseRoot, 'motion-offload', name));
 await fs.copyFile(path.join(here, 'shared-graphics-worker/graphics_bootstrap.py'), path.join(releaseRoot, 'shared-graphics-worker/graphics_bootstrap.py'));
 await fs.copyFile(path.join(baseRoot, 'shared-graphics-worker/worker.patched.py'), path.join(releaseRoot, 'shared-graphics-worker/worker.patched.py'));
 for (const name of ['worker.mjs', 'service.py', 'runtime.json']) await fs.copyFile(path.join(baseRoot, 'map-offload', name), path.join(releaseRoot, 'map-offload', name));

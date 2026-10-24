@@ -15,11 +15,11 @@ def patch_node(text):
         if text.count(MARKER) != 1:
             raise RuntimeError('Required scheduler dispatch hook duplicated')
         return text
-    found = re.findall(r'function ([\w$]+)\(e,t,r,n\)\{let o=null;for\(let i of t\.waiters\)\{let a=[\w$]+\(e,i\.jobId,r,i\.resourceKey,i\.priority\);'
-                       r'if\(a===null\)return\{waiter:i,reason:null\};', text)
+    found = re.findall(r'function ([\w$]+)\(e,t,r,n\)\{let o=null;for\(let i of t\.waiters\)\{let ([\w$]+)=[\w$]+\(e,i\.jobId,r,i\.resourceKey,i\.priority\);'
+                       r'if\(\2===null\)return\{waiter:i,reason:null\};', text)
     if len(found) != 1:
         raise RuntimeError('Required scheduler dispatch fingerprint missing or ambiguous')
-    name = found[0]
+    name = found[0][0]
     hook = ('Object.defineProperty(globalThis,"__vfSchedulerDispatch",'
             '{configurable:true,get(){return ' + name + '},set(v){' + name + '=v}})')
     return text + '\n' + MARKER + ';try{' + hook + '}catch{}\n'

@@ -277,6 +277,32 @@ def install_composition_timeout_diagnostics(engine):
             setattr(engine,name,guard(original,name))
 
 
+async def run_cancel_aware(run,read_job,interval=5):
+    """Observe native cancellation even while no render progress callback can run."""
+    work=asyncio.create_task(run())
+    requested=False
+    async def watch():
+        nonlocal requested
+        while not work.done():
+            await asyncio.sleep(interval)
+            try:job=await asyncio.wait_for(read_job(),5)
+            except Exception:continue
+            if getattr(job,'cancel_requested',False) and not work.done():
+                requested=True
+                work.cancel('Native Home job cancellation requested')
+                return
+    watcher=asyncio.create_task(watch())
+    try:
+        return await work
+    except asyncio.CancelledError:
+        if not requested or asyncio.current_task().cancelling():raise
+    finally:
+        watcher.cancel()
+        await asyncio.gather(watcher,return_exceptions=True)
+        if not work.done():work.cancel()
+        await asyncio.gather(work,return_exceptions=True)
+
+
 def install_worker(worker_cls,executor_cls):
     if getattr(worker_cls,'_vf_home_installed',False):return
     install_executor(executor_cls)
@@ -296,6 +322,9 @@ def install_worker(worker_cls,executor_cls):
         try:
             if HOME_SCOPE.get() and HOME_SCOPE.get().get('kind')=='composition':
                 install_composition_timeout_diagnostics(getattr(self,'engine',None))
+            if HOME_SCOPE.get() and getattr(self,'job_queue',None) is not None:
+                return await run_cancel_aware(lambda:original(self,job_id,job_data),
+                    lambda:self.job_queue.get_job(job_id))
             return await original(self,job_id,job_data)
         finally:WORK_STATE.reset(work);HOME_SCOPE.reset(token)
     worker_cls._process_job=process

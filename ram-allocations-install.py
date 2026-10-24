@@ -4,7 +4,7 @@ The native RAM gate keeps one entry per granted lease in a module Map
 (`X.set(id,{laneKey,resourceKey,estimateMb,grantedAtMs})`). A Frameshift render that
 executes on the Home PC still holds its full server estimate, so other lanes wait for
 phantom memory. This patch publishes the Map as globalThis.__vfRamAllocations; while a
-render runs remote, remote-active lowers that render's estimate and restores it after.
+render runs remote, remote-active lowers that render's estimate and restores Ke after.
 """
 import re
 

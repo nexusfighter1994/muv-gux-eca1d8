@@ -6,11 +6,44 @@ from unittest.mock import patch
 import json
 import urllib.error
 import sys
+from types import SimpleNamespace
 
 FILE=Path(__file__).resolve().parents[1]/'fflow'/'pc_home_queue.py'
 
 
 class HomeProcessAdmissionTests(unittest.TestCase):
+    def test_cancel_during_home_admission_awaits_owned_cleanup(self):
+        async def run():
+            cleanup=[]
+            async def work():
+                try:await asyncio.Event().wait()
+                finally:await asyncio.sleep(.01);cleanup.append('done')
+            async def read():return SimpleNamespace(cancel_requested=True)
+            await asyncio.wait_for(self.home.run_cancel_aware(work,read,interval=.001),.5)
+            self.assertEqual(cleanup,['done'])
+            self.assertEqual([t for t in asyncio.all_tasks() if t is not asyncio.current_task()],[])
+        asyncio.run(run())
+
+    def test_monitor_read_failure_does_not_cancel_valid_render(self):
+        async def run():
+            async def work():await asyncio.sleep(.015);return 'output'
+            async def read():raise OSError('transient')
+            self.assertEqual(await self.home.run_cancel_aware(work,read,interval=.001),'output')
+        asyncio.run(run())
+
+    def test_outer_cancel_still_propagates_after_cleanup(self):
+        async def run():
+            cleanup=[]
+            async def work():
+                try:await asyncio.Event().wait()
+                finally:cleanup.append('done')
+            async def read():return SimpleNamespace(cancel_requested=False)
+            task=asyncio.create_task(self.home.run_cancel_aware(work,read,interval=.001))
+            await asyncio.sleep(.01);task.cancel()
+            with self.assertRaises(asyncio.CancelledError):await task
+            self.assertEqual(cleanup,['done'])
+        asyncio.run(run())
+
     def setUp(self):
         self.assertTrue(FILE.is_file(),'Home fallback isolation module is missing')
         spec=importlib.util.spec_from_file_location('fixture_home_queue',FILE)

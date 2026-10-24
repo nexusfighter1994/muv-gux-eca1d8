@@ -9,6 +9,9 @@ import pcStatusExtras from './pc-status-extras.cjs';
 
 export function isHomeSiglipEmbedCallback(callback){
   return [
+    '()=>k.runSeparate("siglip embed/rank",J4t(),Ne=>M({query:t,...F?{extraQueries:[...Array.isArray(y)?y:[],r].filter(Boolean),negativeQueries:gxe(yWe,E)}:E?.lookAlikes?.length?{negativeQueries:gxe([],E)}:{},shots:ce,deadlineTs:Ne,signal:I}))',
+    '()=>(s.embedAndRank||I9)({query:Ne[0]||b,extraQueries:[...Ne.slice(1),b].filter(Boolean),negativeQueries:gxe(yWe,g),shots:Tn.map(Ra=>({shot_id:Ra.index,start_sec:0,end_sec:0,duration_sec:0,thumbnail_url:Ra.thumbnailUrl})),deadlineTs:Date.now()+3e4})',
+    '()=>(s.embedAndRank||I9)({query:We,extraQueries:[...Le.slice(1),...ht,b].filter(Boolean),negativeQueries:gxe(se?yWe:[],g),shots:Dn,deadlineTs:Date.now()+12e4})',
     '()=>k.runSeparate("siglip embed/rank",R$t(),Re=>M({query:t,...F?{extraQueries:[...Array.isArray(y)?y:[],r].filter(Boolean),negativeQueries:Wbe(VQe,E)}:E?.lookAlikes?.length?{negativeQueries:Wbe([],E)}:{},shots:ae,deadlineTs:Re,signal:I}))',
     '()=>(a.embedAndRank||hH)({query:Re[0]||b,extraQueries:[...Re.slice(1),b].filter(Boolean),negativeQueries:Wbe(VQe,g),shots:wn.map(ws=>({shot_id:ws.index,start_sec:0,end_sec:0,duration_sec:0,thumbnail_url:ws.thumbnailUrl})),deadlineTs:Date.now()+3e4})',
     '()=>(a.embedAndRank||hH)({query:qe,extraQueries:[...Be.slice(1),...vt,b].filter(Boolean),negativeQueries:Wbe(ne?VQe:[],g),shots:Nn,deadlineTs:Date.now()+12e4})',

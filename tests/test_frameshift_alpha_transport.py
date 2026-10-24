@@ -17,6 +17,7 @@ from unittest.mock import Mock, patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1] / 'home-graphics-worker'
+sys.path.insert(0, str(ROOT / 'motion-offload'))
 FROZEN = Path('E:/VidForgeHomeBoost/graphics-releases/20261015-29-g1')
 MIB = 1024 ** 2
 ALPHA = 'frameshift-alpha-v1'
@@ -121,7 +122,8 @@ def process(result=None, callback=None, wire_size=None, returncode=0):
             callback()
         return raw, b''
     return SimpleNamespace(pid=12345, returncode=returncode, communicate=Mock(side_effect=communicate),
-                           poll=Mock(return_value=0), wait=Mock())
+                           poll=Mock(return_value=0), wait=Mock(),
+                           tree_exited=Mock(return_value=True), terminate_tree=Mock(), dispose=Mock())
 
 
 class AlphaTransportTests(unittest.TestCase):
@@ -133,7 +135,7 @@ class AlphaTransportTests(unittest.TestCase):
         decode = base64.b64decode
         def sized_decode(value, **kwargs):
             return SizedBytes(b'x', size) if value == 'eA==' else decode(value, **kwargs)
-        with patch.object(transport.subprocess, 'Popen', return_value=process(result, wire_size=wire_size)), \
+        with patch.object(transport, 'TreeProcess', return_value=process(result, wire_size=wire_size)), \
              patch.object(base64, 'b64decode', side_effect=sized_decode):
             return (service or self.service).render(data or payload())
 
@@ -153,7 +155,7 @@ class AlphaTransportTests(unittest.TestCase):
             self.assertEqual(health['slots'], transport.GRAPHICS_SLOTS)
 
     def test_unqualified_old_service_rejects_alpha_before_spawning(self):
-        with patch.object(transport.subprocess, 'Popen', return_value=process()) as spawn:
+        with patch.object(transport, 'TreeProcess', return_value=process()) as spawn:
             with self.assertRaisesRegex(ValueError, 'kind|alpha|capability'):
                 make_service(self.worker, None).render(payload())
             spawn.assert_not_called()
@@ -210,7 +212,7 @@ class AlphaTransportTests(unittest.TestCase):
             def encode(self, *args, **kwargs):
                 return SizedBytes(super().encode(*args, **kwargs), 48 * MIB + 1)
         with patch.object(json, 'dumps', side_effect=lambda value: SizedJson(real_dumps(value))), \
-             patch.object(transport.subprocess, 'Popen', return_value=process()) as spawn:
+             patch.object(transport, 'TreeProcess', return_value=process()) as spawn:
             with self.assertRaisesRegex(ValueError, 'body|input'):
                 self.service.render(payload())
             spawn.assert_not_called()
@@ -221,7 +223,7 @@ class AlphaTransportTests(unittest.TestCase):
             data = payload(assets=[{'data': 'eA=='} for _ in sizes])
             with self.subTest(sizes=sizes), \
                  patch.object(base64, 'b64decode', side_effect=[SizedBytes(b'x', n) for n in sizes]), \
-                 patch.object(transport.subprocess, 'Popen', return_value=process()) as spawn:
+                 patch.object(transport, 'TreeProcess', return_value=process()) as spawn:
                 with self.assertRaisesRegex(ValueError, 'input|asset'):
                     self.service.render(data)
                 spawn.assert_not_called()
@@ -230,7 +232,7 @@ class AlphaTransportTests(unittest.TestCase):
         for data in (payload(format='mp4'), payload(kind='unknown-v1'),
                      {k: v for k, v in payload().items() if k != 'kind'}):
             self.service = make_service(self.worker)
-            with self.subTest(data=data), patch.object(transport.subprocess, 'Popen', return_value=process()) as spawn:
+            with self.subTest(data=data), patch.object(transport, 'TreeProcess', return_value=process()) as spawn:
                 with self.assertRaisesRegex(ValueError, 'kind|format|alpha|protocol'):
                     self.service.render(data)
                 spawn.assert_not_called()
@@ -272,7 +274,7 @@ class AlphaTransportTests(unittest.TestCase):
             data = payload(assets=[{'data': 'eA=='} for _ in sizes])
             with self.subTest(file_mb=file_mb), \
                  patch.object(base64, 'b64decode', side_effect=[SizedBytes(b'x', n) for n in sizes]), \
-                 patch.object(transport.subprocess, 'Popen', return_value=process()) as spawn:
+                 patch.object(transport, 'TreeProcess', return_value=process()) as spawn:
                 with self.assertRaisesRegex(ValueError, 'custom input cap'):
                     make_service(owner).render(data)
                 spawn.assert_not_called()
@@ -284,46 +286,37 @@ class AlphaTransportTests(unittest.TestCase):
             # The second graphics slot is free, but the shared CPU budget is full.
             with self.assertRaisesRegex(RuntimeError, 'shared worker budget unavailable|motion busy'):
                 self.service.render(payload(id='b' * 32))
-        with patch.object(transport.subprocess, 'Popen', return_value=process(callback=active)) as spawn:
+        with patch.object(transport, 'TreeProcess', return_value=process(callback=active)) as spawn:
             self.service.render(payload())
         self.assertEqual(spawn.call_count, 1)
         self.assertEqual(self.worker.busy, {'cpu': 17, 'gpu': 5})
         self.assertFalse(self.service.slot.locked())
 
     def test_cancel_of_job_that_already_exited_or_dies_slowly_does_not_quarantine(self):
-        # Race: job exits between poll() and taskkill (taskkill then fails), or the tree needs >2 s.
-        for name, kill_code, wait_effect in [('exited', 128, None), ('slow', 0, 'slow')]:
-            with self.subTest(name):
-                job = Mock()
-                state = {'alive': True}
-                job.poll.side_effect = lambda: None if state['alive'] else 0
-                def wait(timeout=None):
-                    state['alive'] = False
-                    return 0
-                job.wait.side_effect = wait
-                def run(*a, **k):
-                    if name == 'exited': state['alive'] = False
-                    return SimpleNamespace(returncode=kill_code)
-                self.service.jobs['c' * 32] = job
-                with patch.object(transport.subprocess, 'run', side_effect=run), patch.object(transport.os, 'name', 'nt'):
-                    self.assertEqual(self.service.cancel('c' * 32), {'terminated': True})
-                self.assertFalse(self.service.quarantined)
-                self.service.jobs.pop('c' * 32, None)
+        proc = process(callback=lambda: self.service.cancel(payload()['id']))
+        proc.tree_exited.side_effect = [False, False, True, True, True, True]
+        with patch.object(transport, 'TreeProcess', return_value=proc):
+            with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+                self.service.render(payload())
+        self.assertFalse(self.service.quarantined)
+        self.assertEqual(self.worker.busy, {'cpu': 17, 'gpu': 5})
 
     def test_cancel_quarantines_only_while_job_proven_alive(self):
-        job = Mock()
-        job.poll.return_value = None
-        job.wait.side_effect = transport.subprocess.TimeoutExpired('x', 15)
-        self.service.jobs['d' * 32] = job
-        with patch.object(transport.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), patch.object(transport.os, 'name', 'nt'):
+        job = process(callback=lambda: self.service.cancel(payload()['id']))
+        job.tree_exited.return_value = False
+        job.terminate_tree.side_effect = OSError('fixture')
+        with patch.object(transport, 'TreeProcess', return_value=job):
             with self.assertRaisesRegex(RuntimeError, 'termination unconfirmed'):
-                self.service.cancel('d' * 32)
+                self.service.render(payload())
         self.assertTrue(self.service.quarantined)
+        job.tree_exited.return_value = True
+        self.service.reap_quarantined()
+        self.assertFalse(self.service.quarantined)
 
     def test_cpu_full_never_spawns(self):
         busy = {'cpu': 18, 'gpu': 5}
         self.worker.busy = busy.copy()
-        with patch.object(transport.subprocess, 'Popen') as spawn:
+        with patch.object(transport, 'TreeProcess') as spawn:
             with self.assertRaisesRegex(RuntimeError, 'shared worker budget unavailable'):
                 self.service.render(payload())
             spawn.assert_not_called()
@@ -331,7 +324,7 @@ class AlphaTransportTests(unittest.TestCase):
 
     def test_full_gpu_budget_does_not_block_cpu_render(self):
         self.worker.busy = {'cpu': 17, 'gpu': 6}
-        with patch.object(transport.subprocess, 'Popen', return_value=process()) as spawn:
+        with patch.object(transport, 'TreeProcess', return_value=process()) as spawn:
             self.service.render(payload())
         self.assertEqual(spawn.call_count, 1)
         self.assertEqual(self.worker.busy, {'cpu': 17, 'gpu': 6})
@@ -340,14 +333,14 @@ class AlphaTransportTests(unittest.TestCase):
         handler = Handler(path='/motion/' + payload()['id'], command='DELETE')
         transport.dispatch_motion(handler, self.service, None)
         self.assertEqual(handler.responses, [{'terminated': True}])
-        with patch.object(transport.subprocess, 'Popen') as spawn:
+        with patch.object(transport, 'TreeProcess') as spawn:
             with self.assertRaisesRegex(RuntimeError, 'cancelled or replay'):
                 self.service.render(payload())
             spawn.assert_not_called()
 
     def test_delete_during_communicate_cannot_publish_a_success(self):
         proc = process(callback=lambda: self.service.cancel(payload()['id']))
-        with patch.object(transport.subprocess, 'Popen', return_value=proc):
+        with patch.object(transport, 'TreeProcess', return_value=proc):
             with self.assertRaisesRegex(RuntimeError, 'cancelled'):
                 self.service.render(payload())
         self.assertEqual(self.worker.busy, {'cpu': 17, 'gpu': 5})
@@ -356,12 +349,12 @@ class AlphaTransportTests(unittest.TestCase):
         proc = process()
         proc.poll.return_value = None
         proc.communicate.side_effect = [subprocess.TimeoutExpired('offline', 1), (b'', b'')]
-        with patch.object(transport.subprocess, 'Popen', return_value=proc), \
+        with patch.object(transport, 'TreeProcess', return_value=proc), \
              patch.object(transport.subprocess, 'run', return_value=SimpleNamespace(returncode=0)), \
              patch.object(transport.os, 'killpg', create=True):
             with self.assertRaisesRegex(RuntimeError, 'native motion deadline'):
                 self.service.render(payload())
-        proc.wait.assert_called_once()
+        proc.communicate.assert_called()
         self.assertFalse(self.service.quarantined)
         self.assertFalse(self.service.slot.locked())
         self.assertEqual(self.worker.busy, {'cpu': 17, 'gpu': 5})
@@ -370,8 +363,10 @@ class AlphaTransportTests(unittest.TestCase):
         proc = process()
         proc.poll.return_value = None
         proc.communicate.side_effect = subprocess.TimeoutExpired('offline', 1)
+        proc.tree_exited.return_value = False
+        proc.terminate_tree.side_effect = OSError('fixture')
         directory = SimpleNamespace(name='not-created-tempdir', cleanup=Mock())
-        with patch.object(transport.subprocess, 'Popen', return_value=proc), \
+        with patch.object(transport, 'TreeProcess', return_value=proc), \
              patch.object(transport.tempfile, 'TemporaryDirectory', return_value=directory), \
              patch.object(transport.subprocess, 'run', side_effect=RuntimeError('offline kill failure')), \
              patch.object(transport.os, 'killpg', side_effect=RuntimeError('offline kill failure'), create=True):
@@ -381,12 +376,15 @@ class AlphaTransportTests(unittest.TestCase):
         self.assertTrue(self.service.slot.locked())
         self.assertEqual(self.worker.busy, {'cpu': 18, 'gpu': 5})
         directory.cleanup.assert_not_called()
-        self.assertIn(directory, vars(self.service).values())
-        with self.assertRaisesRegex(RuntimeError, 'motion busy'):
+        self.assertIs(directory, self.service.records[payload()['id']]['directory'])
+        with self.assertRaisesRegex(RuntimeError, 'shared worker budget unavailable'):
             self.service.render(payload(id='b' * 32))
+        proc.tree_exited.return_value = True
+        self.service.reap_quarantined()
+        self.assertEqual(self.worker.busy, {'cpu': 17, 'gpu': 5})
 
     def test_native_failure_and_invalid_receipt_do_not_leak_a_lease(self):
-        with patch.object(transport.subprocess, 'Popen', return_value=process(returncode=1)):
+        with patch.object(transport, 'TreeProcess', return_value=process(returncode=1)):
             with self.assertRaisesRegex(RuntimeError, 'native motion failed'):
                 self.service.render(payload())
         self.assertEqual(self.worker.busy, {'cpu': 17, 'gpu': 5})
@@ -399,7 +397,7 @@ class AlphaTransportTests(unittest.TestCase):
         self.worker.motion = self.service
         handler, down, up = Handler(data), Pace(), Pace()
         original = handler.respond
-        with patch.object(transport.subprocess, 'Popen', return_value=process(result)):
+        with patch.object(transport, 'TreeProcess', return_value=process(result)):
             adapter.paced_dispatch(handler, self.worker, down, up)
         self.assertEqual(handler.code, 200)
         self.assertEqual(sum(down.sizes), int(handler.headers['Content-Length']))
@@ -445,10 +443,10 @@ class GraphicsSlotTests(unittest.TestCase):
         def active():
             seen.append(service.slot.locked())
             second = payload(id='b' * 32)
-            with patch.object(transport.subprocess, 'Popen', return_value=process(receipt(second))):
+            with patch.object(transport, 'TreeProcess', return_value=process(receipt(second))):
                 service.render(second)
             seen.append('second done')
-        with patch.object(transport.subprocess, 'Popen', return_value=process(callback=active)):
+        with patch.object(transport, 'TreeProcess', return_value=process(callback=active)):
             service.render(payload())
         self.assertEqual(seen, [True, 'second done'])
         self.assertFalse(service.slot.locked())
@@ -475,7 +473,7 @@ class BootstrapTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         for folder in ('motion-offload', 'map-offload'):
             (self.root / folder).mkdir()
-        for name in ('transport.py', 'adapter.py'):
+        for name in ('transport.py', 'process_tree.py', 'adapter.py'):
             shutil.copy2(ROOT / 'motion-offload' / name, self.root / 'motion-offload' / name)
         # Existing read-only Map facade is intentionally unchanged.
         shutil.copy2(FROZEN / 'map-offload/service.py', self.root / 'map-offload/service.py')
@@ -546,7 +544,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_only_valid_alpha_completion_increments_its_separate_counter(self):
         graphics = self.create()
-        with patch.object(transport.subprocess, 'Popen', return_value=process()):
+        with patch.dict(type(graphics.motion).__init__.__globals__, TreeProcess=Mock(return_value=process())):
             graphics.motion.render(payload())
         health = graphics.health()
         self.assertEqual(health.get('completedAlpha'), 1)
@@ -554,7 +552,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(health['completedMap'], 0)
         for identifier, updates in [('c' * 32, {'format': 'mp4'}), ('d' * 32, {'probe': {'codec': 'h264'}})]:
             data = payload(id=identifier)
-            with patch.object(transport.subprocess, 'Popen', return_value=process(receipt(data, **updates))):
+            with patch.dict(type(graphics.motion).__init__.__globals__, TreeProcess=Mock(return_value=process(receipt(data, **updates)))):
                 with self.assertRaises(ValueError):
                     graphics.motion.render(data)
         self.assertEqual(graphics.health()['completedAlpha'], 1)
@@ -562,7 +560,7 @@ class BootstrapTests(unittest.TestCase):
     def test_custom_cap_rejection_is_not_counted_as_completed_alpha(self):
         self.worker.transfer_limits.get = lambda: {'ffmpegMaxFileMb': 40, 'ffmpegMaxTotalMb': 512}
         graphics = self.create()
-        with patch.object(transport.subprocess, 'Popen', return_value=process()), \
+        with patch.dict(type(graphics.motion).__init__.__globals__, TreeProcess=Mock(return_value=process())), \
              patch.object(base64, 'b64decode', return_value=SizedBytes(b'x', 46 * MIB)):
             with self.assertRaisesRegex(ValueError, 'custom output cap'):
                 graphics.motion.render(payload())
@@ -575,10 +573,10 @@ class BootstrapTests(unittest.TestCase):
                       probe={'codec_name': 'h264'}, cleanupConfirmed=True)
         result.pop('kind')
         result.pop('format')
-        with patch.object(transport.subprocess, 'Popen', return_value=process(result)):
+        with patch.dict(type(graphics.maps).__init__.__globals__, TreeProcess=Mock(return_value=process(result))):
             graphics.maps.render(data)
         self.assertEqual(graphics.health()['completedMap'], 1)
-        with patch.object(transport.subprocess, 'Popen', return_value=process(result)), \
+        with patch.dict(type(graphics.maps).__init__.__globals__, TreeProcess=Mock(return_value=process(result))), \
              patch.object(base64, 'b64decode', return_value=SizedBytes(b'x', 32 * MIB + 1)):
             with self.assertRaises(ValueError):
                 graphics.maps.render(dict(data, id='c' * 32))

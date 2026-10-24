@@ -1,4 +1,4 @@
-export const SCENE_CALLBACK_HASH='616e871d436c22cf95b2d2c3245aa3e865d173825ff96e8a2b807d88ddb7b889';
+export const SCENE_CALLBACK_HASH='d834cb268ba773c4d95127d154bddb3f6bdcc9db776f044fffedc9bcb0781be2';
 export function wrapHomeScenes(original,d){
   return async function(r){
     const lease=d.getContext()?.leases?.get('ffmpeg'),scope=lease?.boosted;
@@ -18,7 +18,13 @@ export function wrapHomeScenes(original,d){
           const publish=r.publishFile||await d.getPublisher();
           const shots=result.shots.map(s=>{const {thumbnailPath,...shot}=s;
             if(typeof thumbnailPath!=='string'||thumbnailPath.includes('/../')||!thumbnailPath.startsWith('/data/projects/'+result.projectSlug+'/home-scene-previews/'+scope.jobId+'/'))throw Error('Preview scope');
-            return {...shot,thumbnail_url:publish(thumbnailPath,'scene-'+process.getBuiltinModule('crypto').randomUUID()+'.jpg')};});
+            let inline={};
+            if(r.includeThumbnailData){
+              const fs=process.getBuiltinModule('fs');
+              if(fs.statSync(thumbnailPath).size>2*1024*1024)throw Error('Scene preview size');
+              inline={thumbnail_data_url:'data:image/jpeg;base64,'+fs.readFileSync(thumbnailPath).toString('base64')};
+            }
+            return {...shot,thumbnail_url:publish(thumbnailPath,'scene-'+process.getBuiltinModule('crypto').randomUUID()+'.jpg'),...inline};});
           d.stats[result.backend==='NVDEC + CPU scenes'?'gpu':'cpu']++;
           try{d.record(scope,result.backend);}catch{}
           return {shots,videoFps:result.videoFps};

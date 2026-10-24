@@ -1,5 +1,7 @@
 """Optional routes for the existing bearer-authenticated18191 Handler, not auto-installed."""
 import base64, hashlib, json, subprocess, threading, re, os, time, tempfile
+from collections import OrderedDict
+from process_tree import TreeProcess
 MAX_BODY = 48 * 1024 * 1024
 MAX_ARTIFACT = 32 * 1024 * 1024
 MAX_OUTPUT = 128 * 1024 * 1024
@@ -70,8 +72,92 @@ class MotionService:
         self.slots = GRAPHICS_SLOTS
         self.slot, self.lock, self.jobs = GraphicsGate(GRAPHICS_SLOTS), threading.Lock(), {}
         self.cancelled = {}
-        self.quarantined = False
-        self.quarantine_directory = None
+        self.completed = OrderedDict()
+        self.records = {}
+        self.recovered = 0
+        self.cleanup_errors = 0
+        self._reaper = None
+        self._closing = False
+
+    @property
+    def quarantined(self):
+        with self.lock:
+            return any(r['quarantined'] for r in self.records.values())
+
+    def health(self):
+        with self.lock:
+            return {'recoveryVersion': 2, 'quarantinedJobs': sum(r['quarantined'] for r in self.records.values()),
+                    'activeJobs': sum(not r['finished'] for r in self.records.values()),
+                    'recoveredJobs': self.recovered, 'cleanupErrors': self.cleanup_errors}
+
+    @staticmethod
+    def _dead(record):
+        process = record['process']
+        try:
+            return process is None or process.tree_exited()
+        except OSError:
+            return False
+
+    def _release_record(self, record):
+        if not record['finished'] or not self._dead(record):
+            return False
+        with self.lock:
+            if self.records.get(record['id']) is not record:
+                return False
+            self.records.pop(record['id'])
+            self.jobs.pop(record['id'], None)
+            self.completed[record['id']] = time.monotonic() + 610
+            while len(self.completed) > 4096:
+                self.completed.popitem(last=False)
+            self.recovered += int(record['quarantined'])
+        try:
+            if record['process']:
+                record['process'].dispose()
+        finally:
+            try:
+                if record['release']:
+                    record['release']()
+            finally:
+                self.slot.release()
+        if record['directory']:
+            try:
+                record['directory'].cleanup()
+            except OSError:
+                with self.lock:
+                    self.cleanup_errors += 1
+        return True
+
+    def _retain(self, record):
+        with self.lock:
+            if self.records.get(record['id']) is not record:
+                return
+            record['quarantined'] = True
+            if self._reaper is None or not self._reaper.is_alive():
+                self._reaper = threading.Thread(target=self._recover_loop, daemon=True,
+                                                name='graphics-lease-recovery')
+                self._reaper.start()
+
+    def _recover_loop(self):
+        while True:
+            time.sleep(.5)
+            self.reap_quarantined()
+            with self.lock:
+                if not any(r['quarantined'] for r in self.records.values()):
+                    self._reaper = None
+                    return
+
+    def reap_quarantined(self):
+        with self.lock:
+            records = [r for r in self.records.values() if r['quarantined'] and r['finished']]
+        for record in records:
+            with record['termination_lock']:
+                if not self._release_record(record) and time.monotonic() >= record['retry_at']:
+                    record['retry_at'] = time.monotonic() + 5
+                    try:
+                        record['process'].terminate_tree()
+                    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+                        pass
+                    self._release_record(record)
 
     def output_limits(self, data):
         kind = data.get('kind') if isinstance(data, dict) else None
@@ -145,31 +231,33 @@ class MotionService:
         return result
 
     def close(self):
-        with self.lock:identifiers=list(self.jobs)
-        for identifier in identifiers:self.cancel(identifier)
+        with self.lock:
+            self._closing = True
+            identifiers = list(self.jobs)
+        for identifier in identifiers:
+            try:
+                self.cancel(identifier)
+            except RuntimeError:
+                pass
 
     def cancel(self, identifier):
         with self.lock:
-            if self.quarantined:raise RuntimeError('termination unconfirmed')
             self.cancelled[identifier] = time.monotonic()+610
-            process = self.jobs.get(identifier)
-            if process and process.poll() is None:
+            record = self.records.get(identifier)
+        if record and record['process']:
+            with record['termination_lock']:
                 try:
-                    if os.name == 'nt':
-                        result = subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True, timeout=10)
-                        # taskkill also "fails" when the job exited on its own in the meantime.
-                        if result.returncode and process.poll() is None: raise RuntimeError('kill rejected')
-                    else:
-                        import signal
-                        os.killpg(process.pid, signal.SIGKILL)
-                    # A killed browser tree can need more than 2 s to release the job process.
-                    process.wait(timeout=15)
-                except Exception:
-                    # Quarantine (slot stays held) only while the job process is PROVEN alive.
-                    if process.poll() is None:
-                        self.quarantined=True
-                        raise RuntimeError('termination unconfirmed')
-            return {'terminated': True}
+                    if not self._dead(record):
+                        record['process'].terminate_tree()
+                        deadline = time.monotonic() + 2
+                        while not self._dead(record) and time.monotonic() < deadline:
+                            time.sleep(.05)
+                except (OSError, RuntimeError, subprocess.TimeoutExpired):
+                    pass
+                if not self._dead(record):
+                    self._retain(record)
+                    raise RuntimeError('termination unconfirmed for this job')
+        return {'terminated': True}
 
     def render(self, data):
         identifier = data.get('id', '') if isinstance(data, dict) else ''
@@ -177,62 +265,67 @@ class MotionService:
             raise ValueError('contract')
         raw = self.input_bytes(data)
         _, max_response = self.output_limits(data)
-        if self.quarantined or not self.slot.acquire(False):
+        if not self.slot.acquire(False):
             raise RuntimeError('motion busy')
-        release = None
-        directory = None
+        record = {'id': identifier, 'release': None, 'directory': None, 'process': None,
+                  'finished': False, 'quarantined': False, 'retry_at': time.monotonic() + 5,
+                  'termination_lock': threading.Lock()}
+        with self.lock:
+            self.cancelled = {k:v for k,v in self.cancelled.items() if v>time.monotonic()}
+            while self.completed and next(iter(self.completed.values())) <= time.monotonic():
+                self.completed.popitem(last=False)
+            if (self._closing or identifier in self.records or identifier in self.cancelled
+                    or identifier in self.completed or len(self.cancelled)>2048):
+                self.slot.release()
+                raise RuntimeError('cancelled or replay')
+            self.records[identifier] = record
         try:
             # Mandatory lease from the EXISTING worker budget; never add a parallel one.
-            release = self.acquire_gpu()
-            if not callable(release):
+            record['release'] = self.acquire_gpu()
+            if not callable(record['release']):
                 raise RuntimeError('shared worker budget unavailable')
-            directory = tempfile.TemporaryDirectory(prefix='vfmo-job-')
+            directory = record['directory'] = tempfile.TemporaryDirectory(prefix='vfmo-job-')
             environment = dict(os.environ, VF_MOTION_JOB_ROOT=directory.name)
             with self.lock:
-                self.cancelled = {k:v for k,v in self.cancelled.items() if v>time.monotonic()}
                 if identifier in self.cancelled or len(self.cancelled)>2048:
                     raise RuntimeError('cancelled or replay')
-                process = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                process = TreeProcess(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                            stderr=subprocess.PIPE, start_new_session=os.name != 'nt',
                                            env=environment,
                                            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0)
                 self.jobs[identifier] = process
+                record['process'] = process
             try:
                 output, diagnostic = process.communicate(raw, timeout=min(600, max(1, data.get('timeoutMs', 600000)/1000))+5)
                 if process.returncode or len(output) > max_response:
                     raise RuntimeError('native motion failed: '+diagnostic[-2000:].decode(errors='replace'))
                 result = self.validate_result(data, json.loads(output))
                 with self.lock:
-                    if self.quarantined or identifier in self.cancelled:
+                    if identifier in self.cancelled:
                         raise RuntimeError('cancelled or replay')
                 return result
             except subprocess.TimeoutExpired:
                 self.cancel(identifier)
                 process.communicate(timeout=10)
                 raise RuntimeError('native motion deadline')
-            finally:
-                with self.lock:
-                    if not self.quarantined:self.jobs.pop(identifier, None)
-                    self.cancelled[identifier] = time.monotonic()+610
         finally:
-            if directory and self.quarantined:
-                # Retain the TemporaryDirectory finalizer until process death is proven.
-                self.quarantine_directory = directory
-            try:
-                if directory and not self.quarantined:
-                    directory.cleanup()
-            finally:
+            with record['termination_lock']:
+                # Successful roots can still leave browser/FFmpeg grandchildren behind.
+                # Only this record's real process tree controls its leases.
                 try:
-                    if release and not self.quarantined:
-                        release()
-                finally:
-                    if not self.quarantined:self.slot.release()
+                    if not self._dead(record):
+                        record['process'].terminate_tree()
+                except (OSError, RuntimeError, subprocess.TimeoutExpired):
+                    pass
+                record['finished'] = True
+                if not self._release_record(record):
+                    self._retain(record)
 
 def dispatch_motion(handler, service, data):
     """Call AFTER existing auth/body-size parsing; returns whether a route matched."""
     if handler.path == '/motion/health' and handler.command == 'GET':
         handler.respond(200, {'version': 1, 'contract': service.contract, 'slots': getattr(service, 'slots', 1),
-                              'kinds': list(service.kinds)})
+                              'kinds': list(service.kinds), **service.health()})
     elif handler.path == '/motion/render' and handler.command == 'POST':
         handler.respond(200, service.render(data))
     elif re.fullmatch('/motion/[a-f0-9]{32}', handler.path) and handler.command == 'DELETE':

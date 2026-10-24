@@ -1,6 +1,6 @@
 export const CAMERA_CALLBACK_HASHES=new Set([
-  '77605c64a860a001e84d7a264d67bff82347a5c7840d237fd75b8254c66fa765',
-  'a63050a428ce233c56b30f4a7252091c3bfcc38153b123bea64b31e0f1ff5542',
+  '75865c1cd4fdeb6e72253dc85d0fa6e3fea9f412ec809cda0bd8195dae82f744',
+  '1e8853ffad802f896849710d649b0dcee11380c30b9b3ed5721262d54f6194e9',
 ]);
 export function cameraRequestAllowed(r){
   if(!r||Object.keys(r).sort().join(',')!=='camera_path,duration_frames,fps,source,target_resolution,wait_for_results')return false;

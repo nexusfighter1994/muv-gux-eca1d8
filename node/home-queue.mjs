@@ -22,7 +22,7 @@ export function createHomeQueue({getState,getCapacity,memoryGate,claim,isAborted
   let draining=false,admitted=initialAdmitted;
   const candidate=w=>w.homeKind==='video-normalize-candidate';
   const candidateCount=()=>Array.from(scopes.values()).filter(s=>s.candidate).length;
-  const eligible=w=>(w.resourceKey==='fflowComposition'
+  const eligible=w=>w.homeKind!=='native-recovery'&&(w.resourceKey==='fflowComposition'
     ||w.resourceKey==='ffmpeg'&&['video-trim','video-normalize','video-normalize-candidate'].includes(w.homeKind))&&!isAborted(w.jobId);
   const claimable=w=>(!candidate(w)||candidateCount()<2)
     &&canClaim(candidate(w)?{...w,homeKind:'video-normalize'}:w,Array.from(scopes.values()));

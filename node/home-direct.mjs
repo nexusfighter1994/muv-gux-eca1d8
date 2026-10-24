@@ -1,5 +1,9 @@
 export function isHomeDirectCallback(callback){
   const source=String(callback);
+  if([
+    '()=>u(["-y","-i",e,"-vf",h,"-map","0:v:0","-map","0:a?","-c:v","libx264",...x3(),"-pix_fmt","yuv420p","-r","24","-c:a","aac","-b:a","192k","-t",p.toFixed(3),"-movflags","+faststart","-f","mp4",t],{timeoutMs:18e4})',
+    '()=>a(["-y","-i",e,"-vf",r,"-map","0:v:0","-map","0:a?","-c:v","libx264",...x3(),"-pix_fmt","yuv420p","-r","24","-c:a","aac","-b:a","192k","-t",c.toFixed(3),"-movflags","+faststart",t],{timeoutMs:18e4})',
+  ].includes(source))return true;
   return /^\(\)=>[a-zA-Z_$][\w$]*\(\["-y","-i",e,"-vf",[rh],/.test(source)
     &&['TL','QL'].some(threads=>source.includes('"-map","0:v:0","-map","0:a?","-c:v","libx264",...'+threads+'(),"-pix_fmt","yuv420p","-r","24","-c:a","aac","-b:a","192k","-t",'))
     &&/,[pl]\.toFixed\(3\),"-movflags","\+faststart",t\],\{timeoutMs:18e4\}\)$/.test(source);

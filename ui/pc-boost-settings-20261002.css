@@ -1,6 +1,11 @@
 pc-boost-settings { display: block; min-width: 0; }
 .vf-homepc-row { min-width: 0; }
 .vf-homepc-row .vc-faint { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
+@media (max-width: 640px) {
+  .vf-homepc-row { display: grid; grid-template-columns: 7px minmax(0, 1fr); gap: 5px 8px; }
+  .vf-homepc-row strong { min-width: 0; overflow-wrap: anywhere; }
+  .vf-homepc-row .vc-faint { grid-column: 2; margin-left: 0; text-align: left; }
+}
 .vf-pc-boost { padding: 24px 0; margin: 16px 0; border-top: 1px solid var(--vc-border); border-bottom: 1px solid var(--vc-border); color: var(--vc-text); letter-spacing: 0; }
 .vf-pc-boost__head, .vf-pc-boost__footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
 .vf-pc-boost .vc-settings__title { margin: 0; font-size: 18px; line-height: 1.4; }

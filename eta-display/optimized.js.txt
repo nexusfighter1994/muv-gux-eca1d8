@@ -1,12 +1,12 @@
-function nPs({ lane, target, ahead, row, profiles, limits }) {
-  const size = wi(row?.size) || wi(limits[lane]) || 1;
+function HZa({ lane, target, ahead, row, profiles, limits }) {
+  const size = Oi(row?.size) || Oi(limits[lane]) || 1;
   const concurrency = Math.max(1, Math.floor(row?.memoryBlocked ? Math.max(1, Number(row.activeForJob) || 0) : size));
-  const fallback = rPs(profiles, lane, [...ahead, target]);
-  const targetTasks = [...psr(target, lane)];
+  const fallback = QZa(profiles, lane, [...ahead, target]);
+  const targetTasks = [...cgr(target, lane)];
   const queued = Math.max(0, Math.ceil(Number(row?.queuedForJob) || 0));
   for (; targetTasks.length < queued;) targetTasks.push(fallback);
   if (!targetTasks.length) return target.remainingPreparationSeconds;
-  const active = ahead.map((job, index) => ({ priority: index + 1, readyAt: job.remainingPreparationSeconds, tasks: [...psr(job, lane)], target: false, head: 0 })).filter(job => job.tasks.length);
+  const active = ahead.map((job, index) => ({ priority: index + 1, readyAt: job.remainingPreparationSeconds, tasks: [...cgr(job, lane)], target: false, head: 0 })).filter(job => job.tasks.length);
   const knownAhead = active.reduce((sum, job) => sum + job.tasks.length, 0);
   const requiredAhead = Math.max(0, Math.ceil(Number(row?.demandAhead) || 0), Math.ceil(Number(row?.queuedAhead) || 0));
   if (requiredAhead > knownAhead) active.unshift({ priority: 0, readyAt: 0, tasks: Array(requiredAhead - knownAhead).fill(fallback), target: false, head: 0 });

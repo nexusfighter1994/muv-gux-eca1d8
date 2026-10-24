@@ -103,9 +103,9 @@ class SnapshotTests(unittest.TestCase):
         self.assertTrue(self.verify()["ok"])
 
     def test_native_version_matches_actual_staged_stock_bundle(self):
-        default = Path(__file__).resolve().parents[3] / "vf-update-20261015" / "stock-new.mjs"
+        default = Path(__file__).resolve().parents[1] / "stock.mjs"
         bundle = Path(os.environ.get('VF_STOCK_BUNDLE', str(default))).read_bytes()
-        self.assertEqual(image.extract_native_version(bundle)["native_version"], VERSION)
+        self.assertEqual(image.extract_native_version(bundle)["native_version"], os.environ.get('VF_EXPECTED_NATIVE_VERSION', '2026.10.19.7'))
 
     def test_native_version_renamed_symbol_is_supported(self):
         evidence = image.extract_native_version(NATIVE_BUNDLE.replace(b"Nk", b"Native$1"))

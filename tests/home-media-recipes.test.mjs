@@ -127,12 +127,12 @@ test('malformed or oversized values cannot qualify', () => {
 });
 
 test('only exact reviewed native callback fingerprints become candidates', () => {
-  assert.equal(callback('()=>x(D,{...$,signal:l})'), 'composite-overlay');
+  assert.equal(callback('()=>x($,{...L,signal:c})'), 'composite-overlay');
   assert.equal(callback('()=>i(T,{signal:p})'), 'composite-overlay');
-  const source = '()=>it(["-y","-i",j,"-filter:v","hflip","-c:v","libx264","-preset","fast","-crf","18","-an",Y])';
+  const source = '()=>Ke(["-y","-i",U,"-filter:v","hflip","-c:v","libx264","-preset","fast","-crf","18","-an",W])';
   assert.equal(callback(source), 'video-mirror');
   for (const value of [source + ';unknown()', source.replace('hflip', 'vflip'),
-    source.replace('it(', 'other('), '()=>x(D,{...$,signal:other})', '()=>i(T,{signal:p,extra:true})',
+    source.replace('Ke(', 'other('), '()=>x($,{...L,signal:other})', '()=>i(T,{signal:p,extra:true})',
     '()=>O1a(At,Nt,rt.window.slowFactor,F,u)', 'async()=>{await SWe({imagePath:t})}', () => 1, null, {}]) {
     assert.equal(callback(value), null);
   }

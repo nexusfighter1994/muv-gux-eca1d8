@@ -22,7 +22,8 @@ class HookReportTests(unittest.TestCase):
         self.assertEqual(len(gate.REQUIRED_HOOKS), 40)
         self.assertEqual(len(set(gate.REQUIRED_HOOKS)), 40)
         self.assertNotIn("node.bundle", gate.REQUIRED_HOOKS)
-        self.assertIn("fflow.fxOutputSentinel", gate.REQUIRED_HOOKS)
+        self.assertIn("fflow.nativeFxDirectoryProtection", gate.REQUIRED_HOOKS)
+        self.assertNotIn("fflow.fxOutputSentinel", gate.REQUIRED_HOOKS)
         self.assertIn("node.gpuRenderEvents", gate.REQUIRED_HOOKS)
 
     def test_contract_matches_staging_declarations_without_importing_installer(self):

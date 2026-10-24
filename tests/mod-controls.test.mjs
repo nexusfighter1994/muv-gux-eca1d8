@@ -81,12 +81,25 @@ check('first install publishes immutable true defaults without touching other se
     const projection = JSON.parse(fs.readFileSync(f.runtimePath, 'utf8'));
     assert.deepEqual(Object.keys(projection).sort(), ['changedAt', 'mods', 'revision', 'version']);
     assert.equal(projection.version, 1);
-    assert.equal(Object.keys(projection.mods).length, 30);
+    assert.equal(Object.keys(projection.mods).length, 28);
     assert.ok(Object.values(projection.mods).every(value => value === true));
     assert.equal(f.db.prepare('SELECT count(*) n FROM app_settings').get().n, 0);
     assert.equal(f.routes.get(`get ${route}`)[0], f.owner);
     assert.equal(f.routes.get(`patch ${route}`)[0], f.owner);
   } finally { f.close(); }
+});
+
+check('retired FX flags remain readable from old settings and expose native read-only protection',async()=>{
+  const saved={version:1,revision:crypto.randomUUID(),changedAt:new Date().toISOString(),mods:{fxRetention:false,fxSentinel:true,homeMotion:true}};
+  const f=await fixture({saved});
+  try{
+    for(const id of ['fxRetention','fxSentinel']){
+      const current=row(f.call('get').body,id);
+      assert.equal(current.upstreamNative,true);assert.equal(current.readOnly,true);assert.equal(current.effective,true);
+      assert.equal(f.call('patch',{revision:saved.revision,changes:{[id]:false}}).statusCode,400);
+    }
+    assert.deepEqual(stored(f.db),saved,'reading old flags must not rewrite production settings');
+  }finally{f.close();}
 });
 
 check('PATCH changes desired only, persists UUID revision and leaves active bytes unchanged', async () => {

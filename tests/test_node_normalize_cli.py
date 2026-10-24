@@ -7,11 +7,13 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
+import subprocess
 import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 CORE = Path(__file__).resolve().parents[1] / 'fflow'
 FILE = CORE / 'pc_node_normalize_cli.py'
@@ -25,6 +27,10 @@ class NormalizeCliTests(unittest.IsolatedAsyncioTestCase):
         spec = importlib.util.spec_from_file_location('node_normalize_cli', FILE)
         self.cli = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.cli)
+        self.real_probe = self.cli.probe_video_source
+        probe_patch = patch.object(self.cli, 'probe_video_source', new=AsyncMock(return_value=True))
+        self.probe = probe_patch.start()
+        self.addCleanup(probe_patch.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.data = Path(self.temp.name)
@@ -155,6 +161,88 @@ class NormalizeCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][2]['gpuPolicy'], 'nvenc-high-qp14-v1')
         self.assertIs(module.select_gpu_policy, selector)
         self.assertEqual(self.source.read_bytes(), before)
+
+    async def test_audio_only_mp4_never_reaches_home_or_changes_source(self):
+        module, calls, selector = self.fake_hook()
+        before = self.source.read_bytes()
+        with patch.object(self.cli, 'probe_video_source', new=AsyncMock(return_value=False), create=True):
+            result = await self.cli.offload(self.request, hook=module)
+        self.assertFalse(result['offloaded'])
+        self.assertEqual(result['metadata']['reason'], 'source_no_video')
+        self.assertEqual(calls, [])
+        self.assertIs(module.select_gpu_policy, selector)
+        self.assertFalse(self.output.exists())
+        self.assertEqual(self.source.read_bytes(), before)
+
+    async def test_probe_error_or_timeout_keeps_counted_native_recovery_available(self):
+        for error in (OSError('private-path'), ValueError('private-data'), asyncio.TimeoutError()):
+            module, calls, _ = self.fake_hook()
+            self.probe.side_effect = error
+            result = await self.cli.offload(self.request, hook=module)
+            self.assertEqual(result, {'offloaded': False, 'metadata': {'reason': 'source_probe_unavailable'}})
+            self.assertEqual(calls, [])
+
+    async def test_probe_is_metadata_only_and_matches_video_not_mp4_extension(self):
+        for raw, expected in ((b'{"streams":[]}', False),
+                              (b'{"streams":[{"codec_type":"audio"}]}', False),
+                              (b'{"streams":[{"codec_type":"video"}]}', True)):
+            process = Mock(returncode=0, communicate=AsyncMock(return_value=(raw, None)))
+            with patch('asyncio.create_subprocess_exec', new=AsyncMock(return_value=process)) as spawn:
+                self.assertEqual(await self.real_probe(self.source), expected)
+            command = spawn.call_args.args
+            self.assertEqual(command[0], 'ffprobe')
+            self.assertEqual(command[-1], str(self.source))
+            self.assertIn('file', command)
+            self.assertIn('v:0', command)
+            process.kill.assert_not_called()
+
+    async def test_probe_timeout_and_cancel_kill_and_reap_only_owned_process(self):
+        for error in (asyncio.TimeoutError(), asyncio.CancelledError()):
+            process = Mock(returncode=None, communicate=AsyncMock(side_effect=error), wait=AsyncMock())
+            with patch('asyncio.create_subprocess_exec', new=AsyncMock(return_value=process)):
+                with self.assertRaises(type(error)):
+                    await self.real_probe(self.source)
+            process.kill.assert_called_once()
+            process.wait.assert_awaited_once()
+
+    async def test_bad_probe_output_never_qualifies_source(self):
+        for code, raw in ((1, b'{}'), (0, b'invalid'), (0, b'[]'), (0, b'{"streams":{}}')):
+            process = Mock(returncode=code, communicate=AsyncMock(return_value=(raw, None)))
+            with patch('asyncio.create_subprocess_exec', new=AsyncMock(return_value=process)):
+                with self.assertRaises(ValueError):
+                    await self.real_probe(self.source)
+
+    async def test_preflight_cancellation_does_not_import_hook_or_start_recovery(self):
+        self.probe.side_effect = asyncio.CancelledError()
+        with patch.object(self.cli, '_load_hook', side_effect=AssertionError('must not import')):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.cli.offload(self.request)
+
+    async def test_source_probe_real_deadline_reaps_stalled_probe(self):
+        async def stalled():
+            await asyncio.Future()
+        process = Mock(returncode=None, communicate=stalled, wait=AsyncMock())
+        with patch('asyncio.create_subprocess_exec', new=AsyncMock(return_value=process)), \
+             patch.object(self.cli, 'SOURCE_PROBE_SECONDS', .01):
+            with self.assertRaises(asyncio.TimeoutError):
+                await self.real_probe(self.source)
+        process.kill.assert_called_once()
+        process.wait.assert_awaited_once()
+
+    @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'real media tools required')
+    async def test_real_audio_only_mp4_is_rejected_but_real_video_still_offloads(self):
+        for source, codec, expected in (('sine=frequency=440:duration=0.1', 'aac', False),
+                                         ('color=size=32x32:rate=24:duration=0.1', 'libx264', True)):
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', source,
+                            '-threads', '1', '-c', codec, str(self.source)],
+                           check=True, timeout=15, capture_output=True)
+            self.probe.side_effect = self.real_probe
+            module, calls, _ = self.fake_hook()
+            before = self.source.read_bytes()
+            result = await self.cli.offload(self.request, hook=module)
+            self.assertEqual(result['offloaded'], expected)
+            self.assertEqual(len(calls), int(expected))
+            self.assertEqual(self.source.read_bytes(), before)
 
     async def test_invalid_request_never_imports_or_calls_the_hook(self):
         request = copy.deepcopy(self.request)

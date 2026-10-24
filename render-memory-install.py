@@ -1,7 +1,7 @@
 """Bounded render RAM fairness at the original scheduler memory-gate boundary."""
 import re
 
-MARKER = '/* vf-custom:render-memory-fairness-v3 */'
+MARKER = '/* vf-custom:render-memory-fairness-k3 */'
 V2_MARKER = '/* vf-custom:render-memory-fairness-v2 */'
 LEGACY_MARKER = '/* vf-custom:render-memory-fairness-v1 */'
 
@@ -46,7 +46,7 @@ def patch_node(text):
     registry = priority.group(3)
     # Rebind both the native function and current callback: native initialization
     # may run before or after this hook, and must not restore an unwrapped gate.
-    # v3: same getState contract via node/scheduler-hotpath.cjs, which skips the
+    # k3: same getState contract via node/scheduler-hotpath.cjs, which skips the
     # per-waiter scan while a render is active and checks each admission key once.
     hook = (
         f'\n{MARKER};try{{{gate.group(1)}=__vfCustom.wrapRenderMemoryGate({gate.group(1)},'

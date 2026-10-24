@@ -17,9 +17,9 @@ LIBRARY = {
     'project.js': ('materializeProject', 'export async function materializeProject(workDir, compositionHtml) {'),
 }
 NATIVE_ANCHORS = (
-    'function RU(){return Jbr.getStore()?.jobId||null}',
-    'function mF(e){return e==="fflow"?"ffmpeg":V0i.has(e)?"render":e}',
-    'Xl=()=>cbr.getStore()', 'fhe=new $Pr', 'jp=new Map', 'isJobAborted:Cbi', 'function Cbi(e){return j0.has(e)}',
+    'function w8(){return skr.getStore()?.jobId||null}',
+    'function YL(e){return e==="fflow"?"ffmpeg":jRi.has(e)?"render":e}',
+    'cl=()=>aSr.getStore()', 'S0e=new iQr', 'af=new Map', 'isJobAborted:SNi', 'function SNi(e){return hb.has(e)}',
 )
 
 
@@ -54,16 +54,48 @@ def patch_library(directory):
 
 
 def patch_node(text):
+    for anchor in NATIVE_ANCHORS:
+        if text.count(anchor) < 1:
+            raise RuntimeError('Required frameshift route native anchor missing: ' + anchor[:40])
     if MARKER in text:
         if text.count(MARKER) != 1:
             raise RuntimeError('Required frameshift route hook duplicated')
-        return text
+        return patch_motion_admission(text)
     for anchor in NATIVE_ANCHORS:
         if text.count(anchor) < 1:
             raise RuntimeError('Required frameshift route native anchor missing: ' + anchor[:40])
     hook = (
-        f'\n{MARKER};try{{__vfCustom.installFrameshiftRoute({{RU:()=>RU(),getStore:()=>fhe.getStore(),mF:e=>mF(e),'
-        'getJobs:()=>jp,Xl:()=>Xl(),isJobAborted:e=>Cbi(e)});'
+        f'\n{MARKER};try{{__vfCustom.installFrameshiftRoute({{RU:()=>w8(),getStore:()=>S0e.getStore(),mF:e=>YL(e),'
+        'getJobs:()=>af,Xl:()=>cl(),isJobAborted:e=>SNi(e)});'
         '__vfCustom.report("frameshiftRoute",true)}catch(e){__vfCustom.report("frameshiftRoute",false,String(e))}\n'
     )
-    return text + hook
+    return patch_motion_admission(text + hook)
+
+
+MOTION_MARKER = '/* vf-custom:home-motion-admission-v1 */'
+
+
+def motion_dependencies():
+    return ('{scheduler:Oe,getState:()=>DJ("render"),getContext:()=>S0e.getStore(),'
+            'claim:w=>{const c=Qv.get("render"),p=c?.probing;sNi("render",DJ("render"),w);if(c&&Qv.get("render")===c)c.probing=p},'
+            'getAdmission:()=>A5e,setAdmission:v=>{A5e=v},getRelease:()=>Rkt,setRelease:v=>{Rkt=v},'
+            'getSlotMeasurer:()=>y5e,setSlotMeasurer:v=>{y5e=v},getEstimate:()=>fK,setEstimate:v=>{fK=v},isMock:()=>j3(),'
+            'runIndependent:fn=>{const c=S0e.getStore();if(!c)return fn();const lanes=new Set(c.lanes),leases=new Map(c.leases);'
+            'lanes.delete("render");leases.delete("render");return S0e.run({...c,lanes,leases},fn)}}')
+
+
+def patch_motion_admission(text):
+    if MOTION_MARKER in text:
+        if text.count(MOTION_MARKER) != 1:
+            raise RuntimeError('Duplicate Motion admission hook')
+        return text
+    for anchor in ('function sNi(e,t,r,{boosted:n=!1}={})', 'function A5e(e,t,r,n=e,o=Ikt(t))',
+                   'async function Rkt(e,t,r,n=e,o=!1)', 'function fK({resourceKey:e,opKey:t=null,quality:r=null,jobId:n=null}={})',
+                   'function j3()', 'boosted:y?.homeScope||!!y?.boosted', 'resourceKey:A.boosted&&typeof A.boosted==="object"?"ffmpegHome":i'):
+        if text.count(anchor) != 1:
+            raise RuntimeError('Required Motion admission anchor changed: '+anchor)
+    # Load after native scheduler/slot sampler and the existing Frameshift route.
+    return text + ('\n'+MOTION_MARKER+';{let timer;const connect=()=>{try{if(!globalThis.__vfFrameshiftRoute||!y5e)return;'
+                   '__vfCustom.installHomeMotionAdmission('+motion_dependencies()+');clearInterval(timer);'
+                   '__vfCustom.report("homeMotionAdmission",true)}catch(e){clearInterval(timer);'
+                   '__vfCustom.report("homeMotionAdmission",false,String(e))}};timer=setInterval(connect,1000);timer.unref();connect()}\n')

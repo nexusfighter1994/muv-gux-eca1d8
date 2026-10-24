@@ -216,8 +216,11 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
     if (original.__vfFrameshiftRoute) return original;
     const routed = async function render(options) {
       stats.calls++;
-      const self = this, native = o => scope.run(true, () => Reflect.apply(original, self, [o]));
-      if (scope.getStore()) { stats.bypassed++; return Reflect.apply(original, this, [options]); }
+      const self = this, native = o => {
+        const run = () => scope.run(true, () => Reflect.apply(original, self, [o]));
+        return globalThis.__vfHomeMotionQueue ? globalThis.__vfHomeMotionQueue.native(run) : run();
+      };
+      if (scope.getStore()) { stats.bypassed++; return native(options); }
       const format = options?.format;
       const kind = format === 'mov' ? 'alpha' : (format === undefined || format === 'mp4') ? 'opaque' : null;
       if (!kind) { reject('format_' + format, options); return native(options); }
@@ -256,7 +259,9 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
           result = await createMotionHook(fallback, shared)(options, { signal, duration });
         }
         if (usedNative) bucket.native++;
-        else { hit(); bucket.home++; stats.last = { kind, jobId: ctx.jobId, at: new Date().toISOString(), path: options.targetPath }; }
+        else { hit(); bucket.home++; stats.last = { kind, jobId: ctx.jobId, at: new Date().toISOString(), path: options.targetPath };
+          try { globalThis.__vfHomeMotionEvents?.record({ ...stats.last, backend: target.type }); } catch {}
+        }
         return result;
       } catch (error) { stats.errors++; throw error; }
       finally { watch.stop(); if (!usedNative) giveTarget(target); stats.active--; }
@@ -315,8 +320,11 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
     if (typeof original !== 'function') throw new TypeError('original must be a function');
     if (original.__vfFrameshiftRoute) return original;
     const wrapped = async function runRender(args) {
-      const self = this, passthrough = () => scope.run(true, () => Reflect.apply(original, self, [args]));
-      if (scope.getStore()) return Reflect.apply(original, this, [args]);
+      const self = this, passthrough = () => {
+        const run = () => scope.run(true, () => Reflect.apply(original, self, [args]));
+        return globalThis.__vfHomeMotionQueue ? globalThis.__vfHomeMotionQueue.native(run) : run();
+      };
+      if (scope.getStore()) return passthrough();
       stats.low.calls++;
       const rec = compositions.get(args?.projectDir);
       if (args?.projectDir) compositions.delete(args.projectDir);
@@ -365,6 +373,7 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
         stats.low.home++;
         if (target.type === 'pod') stats.pod.home++;
         stats.last = { kind: 'low-' + kind, jobId: ctx.jobId, at: new Date().toISOString(), path: args.outputPath };
+        try { globalThis.__vfHomeMotionEvents?.record({ ...stats.last, backend: target.type }); } catch {}
         return { code: 0, timedOut: false, stdout: '', stderr: '' };
       } catch (error) { stats.errors++; throw error; }
       finally { watch.stop(); if (!usedNative) giveTarget(target); stats.active--; }

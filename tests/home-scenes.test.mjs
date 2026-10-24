@@ -31,3 +31,19 @@ test('cold install publishes scene counters and remains idempotent',()=>{
   assert.equal(installHomeScenes(d),hook);assert.equal(saved,render);
  }finally{delete globalThis.__vfHomeScenes;delete globalThis.__vfHomeQueue;}
 });
+
+test('new native inline-thumbnail option keeps the owned JPEG and rejects oversized previews',async()=>{
+ const original=process.getBuiltinModule;
+ try{
+  let size=4;
+  process.getBuiltinModule=name=>name==='fs'?{statSync:()=>({size}),readFileSync:()=>Buffer.from([255,216,255,217])}:original(name);
+  const result={offloaded:true,verified:true,backend:'NVDEC + CPU scenes',videoFps:30,projectSlug:'real-project-123',
+    shots:[{shot_id:1,start_sec:0,end_sec:3,thumbnailPath:'/data/projects/real-project-123/home-scene-previews/x/a/shot_1.jpg'}]};
+  const s=setup(result),rendered=await s.fn({deadlineTs:Date.now()+240000,includeThumbnailData:true});
+  assert.equal(rendered.shots[0].thumbnail_data_url,'data:image/jpeg;base64,/9j/2Q==');
+  assert.equal(rendered.shots[0].thumbnail_url,'/preview');
+  size=2*1024*1024+1;const fallback=setup(result);
+  assert.equal(await fallback.fn({deadlineTs:Date.now()+240000,includeThumbnailData:true}),'native');
+  assert.deepEqual(fallback.calls,['home','permit','native']);
+ }finally{process.getBuiltinModule=original;}
+});

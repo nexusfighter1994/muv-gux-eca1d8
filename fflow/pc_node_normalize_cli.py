@@ -15,6 +15,7 @@ import time
 MAX_JSON_BYTES = 65536
 MAX_BASE64_CHARS = 131072
 DEADLINE_SECONDS = 180
+SOURCE_PROBE_SECONDS = 5
 GPU_POLICY = 'nvenc-high-qp14-v1'
 NORMALIZE_FILTER = 'scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080'
 NATIVE_FILTER = re.compile(r'(?:crop=[1-9][0-9]{0,4}:[1-9][0-9]{0,4}:[0-9]{1,5}:[0-9]{1,5},)?'
@@ -129,11 +130,40 @@ def _load_hook():
     return pc_ffmpeg_hook
 
 
+async def probe_video_source(path):
+    # Metadata only: never decode/encode here or spend Home GPU/CPU permits on audio-only MP4s.
+    process = await asyncio.create_subprocess_exec(
+        'ffprobe', '-v', 'error', '-threads', '1', '-protocol_whitelist', 'file',
+        '-select_streams', 'v:0', '-show_entries', 'stream=codec_type', '-of', 'json', str(path),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    try:
+        stdout, _ = await asyncio.wait_for(process.communicate(), SOURCE_PROBE_SECONDS)
+        if process.returncode != 0:
+            raise ValueError('Source probe failed')
+        media = json.loads(stdout)
+        if not isinstance(media, dict) or not isinstance(media.get('streams'), list):
+            raise ValueError('Invalid source probe')
+        return any(isinstance(stream, dict) and stream.get('codec_type') == 'video'
+                   for stream in media['streams'])
+    finally:
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+
+
 async def offload(request, *, hook=None):
     try:
         recipe = qualify(request)
     except (ValueError, OSError, TypeError):
         return _record('not_eligible')
+    try:
+        if not await probe_video_source(recipe['argv'][2]):
+            return _record('source_no_video')
+    except (OSError, ValueError, asyncio.TimeoutError):
+        return _record('source_probe_unavailable')
     hook = hook or _load_hook()
     original_selector = hook.select_gpu_policy
     policy = None

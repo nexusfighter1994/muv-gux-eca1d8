@@ -5,9 +5,17 @@
 const count = value => (Number.isSafeInteger(value) && value >= 0 ? value : null);
 
 function statusExtras() {
+  const queue = globalThis.__vfHomeMotionQueue?.stats?.() || null;
+  let serverStagingMb = 0, serverStagingAllocations = 0;
+  for (const entry of globalThis.__vfRamAllocations?.values?.() || []) {
+    if (entry?.laneKey === 'render' && entry.resourceKey === 'motionHome' && count(entry.estimateMb) !== null) {
+      serverStagingMb += entry.estimateMb; serverStagingAllocations++;
+    }
+  }
   const route = globalThis.__vfFrameshiftRoute?.stats, cap = globalThis.__vfSiglipNativeCap;
   const sum = key => (route ? (count(route.opaque?.[key]) ?? 0) + (count(route.alpha?.[key]) ?? 0) : null);
   return {
+    homeMotionQueue: queue ? { ...queue, serverStagingMb, serverStagingAllocations } : null,
     homeMotion: route ? {
       slots: count(route.limits?.slots), inFlight: count(route.active),
       opaqueHome: count(route.opaque?.home), alphaHome: count(route.alpha?.home), pod: count(route.pod?.home),

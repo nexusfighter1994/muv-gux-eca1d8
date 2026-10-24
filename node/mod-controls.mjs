@@ -25,7 +25,7 @@ function validateFlags(flags, { allowEmpty = false } = {}) {
   for (const [id, enabled] of Object.entries(flags)) {
     const definition = definitions.get(id);
     if (!definition) throw invalid(`Unknown custom mod: ${id}.`);
-    if (definition.readOnly) throw invalid(`${id} is always on: ${definition.alwaysOnReason}`);
+    if (definition.readOnly && !(allowEmpty && definition.upstreamNative)) throw invalid(`${id} is always on: ${definition.alwaysOnReason}`);
     if (typeof enabled !== 'boolean') throw invalid(`${id} must be true or false.`);
   }
   return { ...flags };

@@ -403,7 +403,7 @@ function mountConcurrency() {
     const anchor = [...list.querySelectorAll('.vc-worker-row')].find(row => /FFmpeg/i.test(row.querySelector('strong')?.textContent || ''));
     if (!anchor) continue;
     let previous = anchor;
-    for (const [key, label] of [['queue','Home PC queue'],['cpu', 'Home PC FFmpeg CPU'], ['gpu', 'Home PC FFmpeg GPU'], ['graphics', 'Home PC Motion (CPU) / Maps (GPU)'], ['scene', 'Home PC Scenes'], ['siglip', 'Home PC SigLIP GPU']]) {
+    for (const [key, label] of [['queue','Home PC queue'],['cpu', 'Home PC FFmpeg CPU'], ['gpu', 'Home PC FFmpeg GPU'], ['motion','Home PC Motion queue (CPU)'], ['graphics', 'Home PC graphics pool'], ['scene', 'Home PC Scenes'], ['siglip', 'Home PC SigLIP GPU']]) {
       const row = document.createElement('li');
       row.className = 'vc-worker-row vf-homepc-row';
       row.dataset.homepcRow = key;
@@ -416,10 +416,22 @@ function mountConcurrency() {
   }
 }
 
+function homeMotionSummary(data) {
+  const q=data?.homeMotionQueue, count=value=>Number.isSafeInteger(value)&&value>=0?String(value):'?';
+  if(!q)return 'Motion queue status unavailable';
+  const ram=Number.isSafeInteger(q.serverStagingMb)?`${(q.serverStagingMb/1024).toFixed(1)} GB server staging`:'Server staging unavailable';
+  return `${count(q.homeActive)} Home active | ${count(data?.homeMotion?.slots)} slots | ${count(q.queued)} queued candidates | ${count(q.recovering)} server recoveries | ${ram}`;
+}
+
 function renderConcurrency(data) {
   const number = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : '?';
   for (const row of document.querySelectorAll('[data-homepc-row]')) {
     const key = row.dataset.homepcRow;
+    if(key==='motion'){
+      row.querySelector('.vc-faint').textContent=homeMotionSummary(data);
+      row.classList.toggle('vc-worker-row--busy',Number(data?.homeMotionQueue?.homeActive)>0);
+      continue;
+    }
     if(key==='queue'){
       const q=data?.homeQueue;
       row.querySelector('.vc-faint').textContent=q
@@ -438,10 +450,10 @@ function renderConcurrency(data) {
       continue;
     }
     if (key === 'graphics') {
-      // Busy of the slots the server offers (PC Boost motionSlots), then where motion went since the route started.
-      const motion = data?.homeMotion, slots = Number.isSafeInteger(motion?.slots) ? motion.slots : worker?.graphicsCapacity;
+      // Shared graphics occupancy must use the shared pool's capacity, not Motion's sub-limit.
+      const motion = data?.homeMotion;
       const parts = Number.isSafeInteger(worker?.graphicsCapacity) && worker.graphicsCapacity >= 1
-        ? [`${number(worker.graphicsBusy)}/${number(slots)} busy`] : ['Graphics worker unavailable; server normal'];
+        ? [`${number(worker.graphicsBusy)}/${number(worker.graphicsCapacity)} busy`] : ['Graphics worker unavailable; server normal'];
       if (motion) parts.push(`recent: ${number((motion.opaqueHome ?? 0) + (motion.alphaHome ?? 0))} on PC, ${number(motion.native)} on server`);
       if (Number.isSafeInteger(worker?.graphicsCapacity)) parts.push(`${number(worker.completedMotion)} motion${Number.isSafeInteger(worker.completedAlpha) ? ` + ${worker.completedAlpha} overlays` : ''} | ${number(worker.completedMap)} maps completed (PC total)`);
       row.querySelector('.vc-faint').textContent = parts.join(' | ');
