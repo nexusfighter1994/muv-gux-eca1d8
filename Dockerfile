@@ -8,5 +8,6 @@ COPY . /opt/vf-custom
 RUN python3 /opt/vf-custom/apply.py
 RUN node /opt/vf-custom/update-tools/verify-siglip-callbacks.mjs /app/server/dist/index.mjs /app/server/dist/vf-custom/home-siglip.mjs
 RUN node /opt/vf-custom/update-tools/verify-home-callbacks.mjs /app/server/dist/index.mjs /app/server/dist/vf-custom
+RUN node /opt/vf-custom/update-tools/verify-home-ocr.cjs /app/server/dist/index.mjs
 LABEL org.vidforge.custom.contract="vf-custom-41-20261023" \
       org.vidforge.custom.upstream-version="2026.10.22.12"

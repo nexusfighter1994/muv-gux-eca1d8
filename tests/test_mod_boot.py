@@ -56,9 +56,9 @@ class BootSnapshotTests(unittest.TestCase):
         self.assertEqual(self.runtime.read_bytes(), active_bytes)
         self.assertTrue(self.load('second')['mods']['homeQueue'])
 
-    def test_no_saved_policy_keeps_all_30_defaults_true_without_writing_database(self):
+    def test_no_saved_policy_keeps_all_31_defaults_true_without_writing_database(self):
         state = self.load('fresh')
-        self.assertEqual(len(state['mods']), 30)
+        self.assertEqual(len(state['mods']), 31)
         self.assertTrue(state['mods']['thumbnailIdentity'])
         self.assertTrue(all(state['mods'].values()))
         self.assertIsNone(state['revision'])

@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { installPcBoost } from './pc-boost-api.mjs';
+import homeHealthChannel from './home-health-channel.cjs';
 import { installTransferControls, readTransferRuntime } from './pc-transfer-api.mjs';
 import { mapAdmissionStats } from './map-admission.mjs';
 import { ffmpegAdmissionStats } from './ffmpeg-admission.mjs';
@@ -24,16 +25,20 @@ import thumbnailSubjectIdentity from './thumbnail-subject-identity.cjs';
 import longAssembly from './long-assembly.cjs';
 import finalHash from './final-hash.cjs';
 import renderMemoryFairness from './render-memory-fairness.cjs';
+import surplusModelKeys from './surplus-model-keys.cjs';
 import schedulerHotpath from './scheduler-hotpath.cjs';
 import homeRemote from './home-graphics/remote-active.cjs';
 import homeMotionDispatch from './home-motion-dispatch.cjs';
+import homeMotionValidation from './home-motion-validation.cjs';
 import runpodBurst from './runpod/burst-controller.cjs';
 import jobPriority from './job-priority.cjs';
 import fflowResubmit from './fflow-resubmit.cjs';
+import fflowSubmitDeadline from './fflow-submit-deadline.cjs';
 import brollReuse from './broll-reuse.cjs';
 import spawnProxy from './spawn-proxy.cjs';
 import procScan from './proc-scan-cache.cjs';
 import frameshiftRoute from './home-graphics/motion-offload/frameshift-route.cjs';
+import sourceTextAlignment from './source-text-alignment.cjs';
 import { getMotionConfiguration } from './home-graphics/motion-offload/binding.mjs';
 export { fishFreeModel, fishFreeAvailable } from './fish-free.mjs';
 import { createCompatibleConcat as _createCompatibleConcat } from './stream-compat.mjs';
@@ -48,6 +53,9 @@ import { wrapHomeNormalizeExec as _wrapHomeNormalizeExec } from './home-normaliz
 export { nativeNormalizeRequest, canHomeNormalizeFilter } from './home-normalize.mjs';
 import { installHomeDirect as _installHomeDirect } from './home-direct.mjs';
 export { modEnabled };
+export function repairSourceTimeline(options) {
+  return modEnabled('sourceTextAlignment') ? sourceTextAlignment.repairSourceTimeline(options) : options.aligned;
+}
 export function createThumbnailSubjectHooks(builders) {
   const enabled = modEnabled('thumbnailIdentity');
   if (enabled) thumbnailSubjectIdentity.validateTemplates(builders);
@@ -99,8 +107,17 @@ export function installFrameshiftRoute(native) {
 }
 export function installHomeMotionAdmission(native) {
   if (!modEnabled('homeMotion')) return null;
-  return homeMotionDispatch.install({...native,remote:homeRemote,
+  const queue = homeMotionDispatch.install({...native,remote:homeRemote,
     getSettings:()=>getMotionConfiguration()?.getSettings?.()});
+  if (!globalThis.__vfHomeMotionValidation) homeMotionValidation.start({queue,
+    enabled:()=>modEnabled('homeMotion')&&getMotionConfiguration()?.getSettings?.()?.homeMotion===true,
+    isAborted:id=>native.scheduler.isJobAborted(id)});
+  return queue;
+}
+export function validateHomeMotion(provider, payload, jobId, signal) {
+  const native=()=>provider.validateComposition({...payload,signal});
+  const validation=globalThis.__vfHomeMotionValidation;
+  return validation?validation.run(native,payload,{jobId,signal}):native();
 }
 // RunPod GPU burst (PC Boost settings burst*): rents one pod while many frameshift renders wait.
 export function installRunpodBurst() {
@@ -114,6 +131,13 @@ export function installJobPriority(native) {
   manager.start();
   return (globalThis.__vfJobPriority = manager);
 }
+export function installMapQueuePriority(native) {
+  if (!modEnabled('mapAdmission') || globalThis.__vfMapQueuePriority) return globalThis.__vfMapQueuePriority || null;
+  const helper = process.getBuiltinModule('module').createRequire(import.meta.url)('./map-queue-priority.cjs');
+  const manager = helper.createMapQueuePriority(native);
+  manager.start();
+  return (globalThis.__vfMapQueuePriority = manager);
+}
 export function wrapRenderMemoryGate(original, getState) { return modEnabled('mapAdmission') ? renderMemoryFairness.createRenderMemoryFairness(original, { getState }) : original; }
 export function wrapFfmpegAdmissionCheck(original, ...args) { return modEnabled('ffmpegAdmission') ? _wrapFfmpegAdmissionCheck(original, ...args) : original; }
 export function installGpuRenderEvents(...args) {
@@ -125,7 +149,17 @@ export function installHomeAdmission(...args) { if (homeQueueEnabled()) return _
 export function wrapHomeFflowClient(original, ...args) { return homeQueueEnabled() ? _wrapHomeFflowClient(original, ...args) : original; }
 export function wrapHomeRamEstimate(original, ...args) { return homeQueueEnabled() ? _wrapHomeRamEstimate(original, ...args) : original; }
 export function installHomeLibraryTrim(...args) { if (homeQueueEnabled()) return _installHomeLibraryTrim(...args); }
-export function installHomeDirect(...args) { if (homeQueueEnabled()) return _installHomeDirect(...args); }
+export function installHomeDirect(...args) {
+  if (!homeQueueEnabled()) return undefined;
+  const result = _installHomeDirect(...args);
+  // vf-custom:small-steps-v1: priority and an own RAM class for the bar detection before a credit render
+  // (small-steps.cjs; off until /data/runtime/vf-small-steps.json enables it).
+  try {
+    process.getBuiltinModule('module').createRequire(import.meta.url)('./small-steps.cjs').install({ scheduler: args[0]?.scheduler });
+    report('smallSteps', true);
+  } catch (error) { report('smallSteps', false, String(error?.message || error)); }
+  return result;
+}
 export function wrapHomeNormalizeExec(original, ...args) { return homeQueueEnabled() ? _wrapHomeNormalizeExec(original, ...args) : original; }
 export function installHomeSiglipStartup(...args) { if (modEnabled('homeSiglip')) return _installHomeSiglipStartup(...args); }
 const runtime = {};
@@ -371,7 +405,10 @@ function wrapEngineClient(client, name) {
   };
   client.__vfRetry = true;
   // A transient Home-fallback admission failure inside FFlow is resubmitted, never fails the chunk.
-  if (name === 'fflow') client.request = fflowResubmit.createResubmitter(client.request);
+  if (name === 'fflow') {
+    client.request = fflowResubmit.createResubmitter(client.request);
+    fflowSubmitDeadline.install(client);
+  }
   return true;
 }
 export function installEngineRetry(clients) {
@@ -477,6 +514,24 @@ function validateCustom(patch) {
 export function maxActiveVideos() { return modEnabled('queueLimit') ? customSettings.maxActiveVideos : 1000000; }
 // ---- Surplus retries (old VidForge: Surplus is retried, not skipped after a few 503s) ----
 const isSurplus = spec => (spec && typeof spec === 'object' ? spec.provider : spec) === 'surplus';
+const SURPLUS_TEMPORARY_MARKET_CODES = new Set(['minimum_discount_not_met', 'no_sellers', 'no_healthy_sellers', 'no_available_sellers']);
+export function shouldStopSurplusRetry(spec, error, hardHttpStop, stockRetryable) {
+  const stockStop = hardHttpStop || !stockRetryable;
+  if (!stockStop || !modEnabled('surplusRetry') || !isSurplus(spec)) return stockStop;
+  const status = Number(/^http_(\d+)$/.exec(String(error?.code || ''))?.[1] || error?.detail?.status || 0);
+  if (status !== 404 || error?.noRetry || error?.pauseRun) return stockStop;
+  const body = error?.detail?.body;
+  let code = null;
+  if (body && typeof body === 'object') code = body.error?.code;
+  else if (typeof body === 'string') {
+    try { code = JSON.parse(body)?.error?.code; } catch {
+      // Native HTTP errors truncate bodies at 500 chars, often inside message.
+      // Only accept a code in the leading error object, never message contents.
+      code = /^\s*\{\s*"error"\s*:\s*\{\s*(?:"type"\s*:\s*"[^"\\]*"\s*,\s*)?"code"\s*:\s*"([^"\\]+)"/.exec(body)?.[1];
+    }
+  }
+  return SURPLUS_TEMPORARY_MARKET_CODES.has(code) ? false : stockStop;
+}
 export function llmAttempts(spec, stock) {
   if (!modEnabled('surplusRetry')) return stock;
   return isSurplus(spec) ? Math.max(Number(stock) || 1, customSettings.surplusAttempts) : stock;
@@ -495,24 +550,90 @@ export function breakerAllows(spec, stockAllows) {
   if (!modEnabled('surplusRetry')) return stockAllows;
   return stockAllows || (isSurplus(spec) && customSettings.surplusIgnoreBreaker === true);
 }
+export function surplusOutputBudget(spec, role, pipeline, budget) {
+  if (!modEnabled('surplusRouting')) return budget;
+  if (spec?.provider !== 'surplus' || spec.model !== 'deepseek-v4.1-flash' ||
+      spec.modelOverridden !== true || spec.effort !== 'high' || pipeline !== 'vision') return budget;
+  if (role !== 'brollSegmentScorerFrames' && role !== 'imageScorerCliProxy') return budget;
+  // High reasoning exhausted the native 16K default without producing the final JSON.
+  if (Number(budget) !== 16384) return budget;
+  const stats = surplusOutputBudget.stats ||= { preparedRequests: 0 };
+  stats.preparedRequests += 1;
+  stats.lastAt = new Date().toISOString();
+  stats.lastRole = role;
+  stats.fromTokens = 16384;
+  stats.toTokens = 65536;
+  return 65536;
+}
 // Text/vision chains with a fixed route put cli-proxy first; move Surplus to the front instead
 // (keeps the route's effort). Routes whose built-in chain has no Surplus at all (frame/image
 // scorers, overlay locators: cli-proxy -> OpenRouter) get a Surplus leg in front, using the
-// Surplus model from Settings -> Routing. User pins, video inputs and the special scorers that
-// stock keeps on their own models stay untouched.
+// Surplus model from Settings -> Routing. Explicit saved provider order always wins.
+// User pins, video inputs and the special scorers on their own models stay untouched.
 const SURPLUS_INSERT_SKIP = new Set(['brollSegmentScorer', 'brollSegmentScorerAntigravity', 'imageScorer', 'assetPartLocator', 'thumbnailBlueprintAnalyzer', 'thumbnailValidator']);
 let routingModelsCache = { at: 0, value: null };
-function surplusRouting(pipeline) {
+function routingSettings() {
   if (Date.now() - routingModelsCache.at > 30000) {
     let value = null;
-    try { value = JSON.parse(settingsDb.prepare("SELECT value_json FROM app_settings WHERE key = 'general'").get()?.value_json || '{}')?.routingModels || null; } catch {}
+    try { value = JSON.parse(settingsDb.prepare("SELECT value_json FROM app_settings WHERE key = 'general'").get()?.value_json || '{}'); } catch {}
     routingModelsCache = { at: Date.now(), value };
   }
-  const entry = routingModelsCache.value?.[pipeline === 'vision' ? 'vision' : 'scripts']?.surplus;
+  return routingModelsCache.value;
+}
+function surplusRouting(pipeline) {
+  const entry = routingSettings()?.routingModels?.[pipeline === 'vision' ? 'vision' : 'scripts']?.surplus;
   return entry && typeof entry === 'object' ? entry : null;
 }
+function withSurplusVisionFallback(chain, pipeline) {
+  const routing = surplusRouting(pipeline);
+  if (pipeline !== 'vision' || routing?.model !== 'deepseek-v4.1-flash') return chain;
+  const primary = chain.filter(leg => isSurplus(leg) && leg.model === 'deepseek-v4.1-flash');
+  if (!primary.length) return chain;
+  const effort = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(routing.effort) ? routing.effort : null;
+  const seen = new Set();
+  const normalized = chain.flatMap(leg => {
+    if (!isSurplus(leg) || leg.model !== 'deepseek-v4.1-flash' || !effort) return [leg];
+    const key = `${leg.id || leg.provider}\0${effort}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ ...leg, effort, effortOverridden: true }];
+  });
+  if (normalized.some(leg => isSurplus(leg) && leg.model === 'gpt-5.6-luna')) return normalized;
+  const last = normalized.findLastIndex(leg => isSurplus(leg) && leg.model === 'deepseek-v4.1-flash');
+  // Keep Luna's old scorer ladder (or its medium native default), not DeepSeek's selected effort.
+  const fallback = primary.map(leg => ({ ...leg, model: 'gpt-5.6-luna', modelOverridden: true,
+    ...(effort && primary.length === 1 ? { effort: 'medium', effortOverridden: true } : {}) }));
+  return [...normalized.slice(0, last + 1), ...fallback, ...normalized.slice(last + 1)];
+}
+function orderConfiguredChain(chain, route, pipeline) {
+  if (!['vision', 'scripts', 'packaging'].includes(pipeline) || SURPLUS_INSERT_SKIP.has(route)) return chain;
+  chain = withSurplusVisionFallback(chain, pipeline);
+  const settings = routingSettings();
+  const order = settings?.routingOrder?.[pipeline];
+  if (!Array.isArray(order) || !order.length || order.some(id => typeof id !== 'string')) return chain;
+  const result = [...chain];
+  const wellflow = settings?.routingModels?.vision?.wellflow;
+  // Native frame/image scorer chains omit Wellflow. Add only the explicitly configured leg;
+  // credential checks, cancellation, retries and fallback remain in the native chat loop.
+  if (pipeline === 'vision' && order.includes('wellflow') && !result.some(leg => leg?.provider === 'wellflow') &&
+      typeof wellflow?.model === 'string' && wellflow.model.trim()) {
+    result.push({ provider: 'wellflow', id: 'wellflow', model: wellflow.model,
+      modelOverridden: true, effort: wellflow.effort || 'medium',
+      effortOverridden: true });
+  }
+  const rank = leg => {
+    const at = order.indexOf(leg?.id || (leg?.provider === 'cli-proxy' ? 'cliProxy' : leg?.provider));
+    return at < 0 ? order.length : at;
+  };
+  return result.sort((a, b) => rank(a) - rank(b));
+}
 export const surplusFirstStats = { moved: 0, kept: 0, inserted: 0 };
+// DeepSeek legs get one more round on the configured Surplus key before the Luna fallback
+// (surplus-model-keys.cjs); applied to every chain that passes this hook, scorer routes included.
 export function surplusFirst(chain, route, video, pipeline) {
+  return surplusModelKeys.withConfiguredKeyRound(surplusFirstChain(chain, route, video, pipeline));
+}
+function surplusFirstChain(chain, route, video, pipeline) {
   if (!modEnabled('surplusRouting')) return chain;
   try {
     if (customSettings.surplusFirst !== true || video || !Array.isArray(chain) || chain.length < 1) return chain;
@@ -526,14 +647,14 @@ export function surplusFirst(chain, route, video, pipeline) {
         ...(routing?.model ? { modelOverridden: true } : {}),
       }));
       surplusFirstStats.inserted += 1;
-      return [...legs, ...chain];
+      return orderConfiguredChain([...legs, ...chain], route, pipeline);
     }
-    if (at === 0) { surplusFirstStats.kept += 1; return chain; }
+    if (at === 0) { surplusFirstStats.kept += 1; return orderConfiguredChain(chain, route, pipeline); }
     const lead = chain[0];
     const leg = { ...chain[at] };
     if (lead?.effort && !leg.modelOverridden) leg.effort = lead.effort;
     surplusFirstStats.moved += 1;
-    return [leg, ...chain.slice(0, at), ...chain.slice(at + 1)];
+    return orderConfiguredChain([leg, ...chain.slice(0, at), ...chain.slice(at + 1)], route, pipeline);
   } catch { return chain; }
 }
 // The Surplus market check shares one cached promise between all Surplus calls. When that fetch
@@ -713,6 +834,7 @@ export function installCustom({ app, db, requireOwner, runtimePath }) {
       res.json({ settings: customSettings, defaults: CUSTOM_DEFAULTS });
     } catch (error) { res.status(error.status || 500).json({ error: String(error.message || error) }); }
   });
+  try { homeHealthChannel.install(); } catch { console.warn('[home-health] isolated channel unavailable; native transport retained'); }
   try { installPcBoost({ app, db, requireOwner }); report('pcBoostApi', true); }
   catch (error) { report('pcBoostApi', false, String(error?.message || error)); }
   try { installTransferControls({ app, db, requireOwner }); report('pcTransferApi', true); }
@@ -722,6 +844,7 @@ export function installCustom({ app, db, requireOwner, runtimePath }) {
       boost: { ffmpeg: num(globalThis.__vfPcFfmpegLimit), clipvault: num(globalThis.__vfPcClipvaultLimit),
         ffmpegExtra: num(globalThis.__vfPcBoostFfmpegExtra), pcActive: num(globalThis.__vfPcBoostActive) },
       siglip: { ...siglipStats, textMode: serverTextMode() }, surplusFirst: { ...surplusFirstStats },
+      surplusOutputBudget: { ...(surplusOutputBudget.stats || { preparedRequests: 0 }) },
       marketGuard: { ...marketGuardStats }, mapAdmission: { ...mapAdmissionStats },
       ffmpegAdmission: { ...ffmpegAdmissionStats },
       autoRetry: { ...autoRetryStats }, restage: { ...restageStats },

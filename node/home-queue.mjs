@@ -26,7 +26,8 @@ export function createHomeQueue({getState,getCapacity,memoryGate,claim,isAborted
     ||w.resourceKey==='ffmpeg'&&['video-trim','video-normalize','video-normalize-candidate'].includes(w.homeKind))&&!isAborted(w.jobId);
   const claimable=w=>(!candidate(w)||candidateCount()<2)
     &&canClaim(candidate(w)?{...w,homeKind:'video-normalize'}:w,Array.from(scopes.values()));
-  const capacity=()=>Math.max(0,Math.min(50,Number(getCapacity())||0));
+  // 50 Home slots plus up to 24 scopes parked in server recovery (home-dispatch-limit.cjs).
+  const capacity=()=>Math.max(0,Math.min(74,Number(getCapacity())||0));
   const api={
     async drain(){
       if(draining)return;
@@ -118,6 +119,7 @@ export function createServerPermits({validScope,run,newId=()=>crypto.randomUUID(
     close(id){const item=items.get(id);if(!item)return;item.controller.abort(Error('Home fallback permit released'));item.release();
       if(!item.started){items.delete(id);dispatch();}},
     sweep(){for(const[id,item]of items)if(now()-item.touched>90000||!validScope(item.scope))api.close(id);},
+    pendingItems:items,
   };
   return api;
 }
@@ -135,8 +137,8 @@ export function installHomeAdmission({scheduler,getState,getContext,claim,getAdm
   };
   // FFlow-routed claims run ahead of the pool's ready workers (home-pool-claim.cjs).
   const queue=createHomeQueue({getState,getCapacity:requestedCapacity,
-    canClaim:homePoolClaim.makeCanClaim({getCapacity:requestedCapacity,
-      ...(getPoolState?{readPool:()=>{try{return getPoolState();}catch{return null;}}}:{})}),
+    canClaim:homePoolClaim.limitCompositions(homePoolClaim.poolScopesOnly(homePoolClaim.makeCanClaim({getCapacity:requestedCapacity,
+      ...(getPoolState?{readPool:()=>{try{return getPoolState();}catch{return null;}}}:{})}))),
     memoryGate:homeRam.wrapHomeGate(request=>scheduler.getMemoryGate()(request)),isAborted:id=>scheduler.isJobAborted(id),
     claim:(w,scope)=>{
       const resolve=w.resolve;
@@ -173,6 +175,7 @@ export function installHomeAdmission({scheduler,getState,getContext,claim,getAdm
       {signal,interactive:true,resourceKey:scope.kind==='video-normalize'?'ffmpegHomeNormalizeFallback':
         scope.kind==='video-trim'?'ffmpegHomeTrimFallback':'ffmpegHomeFallback',
         segmentType:scope.opKey||null,quality:scope.quality||null,operation:'home-native-fallback'}))});
+  globalThis.__vfHomeRecoveryItems=permits.pendingItems;
   queue.runRecovery=async(scope,fn,signal)=>{
     const id=permits.create(queue.getScope(scope)),deadline=Date.now()+900000;
     let timer;

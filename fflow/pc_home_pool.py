@@ -75,9 +75,37 @@ def native_worker_environment(root,registered):
     raise RuntimeError('No registered native worker environment available')
 
 
+LOG_CAP_BYTES=100*1024*1024
+LOG_KEEP_BYTES=10*1024*1024
+
+
+def cap_log(path=Path('/data/runtime/pc-home-worker.log'),cap=LOG_CAP_BYTES,keep=LOG_KEEP_BYTES):
+    """Keep the shared consumer log bounded (1.4 GB on 2026-11-05). Every consumer start checks it;
+    writers append (O_APPEND), so truncating in place is safe. The last `keep` bytes go to <log>.1."""
+    try:
+        if path.stat().st_size<=cap:return False
+        with open(str(path)+'.rotate.lock','a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            size=path.stat().st_size
+            if size<=cap:return False
+            with open(path,'rb') as source:
+                source.seek(max(0,size-keep));tail=source.read()
+            Path(str(path)+'.1').write_bytes(tail)
+            os.truncate(path,0)
+            return True
+    except OSError:
+        return False
+
+
 async def consume():
     if not mod_enabled('homeQueue'):
         return
+    cap_log()
+    # Consumers skip the native main() logging setup, so structlog printed every DEBUG progress tick:
+    # 2 M lines / 1.4 GB in pc-home-worker.log by 2026-11-05 21:00 (40 consumers). Keep INFO and up.
+    import logging
+    import structlog
+    structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO))
     import src.queue.worker as module
     cls=next(value for value in vars(module).values() if isinstance(value,type)
              and hasattr(value,'_process_job') and hasattr(value,'_wait_for_job'))

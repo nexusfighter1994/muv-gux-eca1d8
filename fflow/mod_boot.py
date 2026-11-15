@@ -9,7 +9,7 @@ import tempfile
 
 
 IDS = ('queueLimit', 'autoRetry', 'surplusRouting', 'surplusRetry', 'marketGuard',
-       'thumbnailOpenlux', 'thumbnailIdentity', 'fishFree', 'ai33Stt', 'sourcingDeadline', 'chunkWatchdog',
+       'thumbnailOpenlux', 'thumbnailIdentity', 'fishFree', 'ai33Stt', 'sourceTextAlignment', 'sourcingDeadline', 'chunkWatchdog',
        'sheetBatch', 'restage', 'fallbacks', 'engineRetry', 'mapAdmission', 'ffmpegAdmission',
        'mapIsolation', 'streamCompat', 'gpuEvents', 'homeQueue', 'homeFfmpeg', 'homeSiglip',
        'homeScenes', 'homeMap', 'homeMotion', 'serverBoost', 'slotCleanup', 'fxRetention', 'fxSentinel')

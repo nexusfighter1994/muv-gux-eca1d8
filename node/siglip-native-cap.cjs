@@ -26,7 +26,7 @@ const isEmbed = w => w?.homeKind === 'siglip-home';
 
 // Ready = a successful Home health probe within READY_MS. One failed probe on a loaded server
 // (event-loop lag past the probe timeout) must not hand the embeddings back to the server.
-const READY_MS = 30000;
+const READY_MS = 120000;
 function homeReady(now = Date.now()) {
   try {
     const s = globalThis.__vfHomeSiglipHealth?.snapshot?.();
@@ -107,4 +107,22 @@ function wrapRelease(original) {
   return wrapped;
 }
 
-module.exports = { NATIVE_EMBEDS, READY_MS, TOKEN, state, configuredLimit, homeReady, tag, wrapDispatch, wrapRelease, releaseToken };
+// Native hooks may publish or replace the dispatcher after Home startup.
+function createDispatchInstaller(getAdmission, {
+  getDispatch = () => globalThis.__vfSchedulerDispatch,
+  setDispatch = value => { globalThis.__vfSchedulerDispatch = value; },
+} = {}) {
+  let installed = null;
+  return function ensureDispatch() {
+    const current = getDispatch();
+    if (typeof current !== 'function') return false;
+    if (current === installed) return true;
+    const wrapped = wrapDispatch(current, getAdmission);
+    setDispatch(wrapped);
+    if (getDispatch() !== wrapped) throw Error('SigLIP dispatcher binding rejected');
+    installed = wrapped;
+    return true;
+  };
+}
+
+module.exports = { NATIVE_EMBEDS, READY_MS, TOKEN, state, configuredLimit, homeReady, tag, wrapDispatch, wrapRelease, releaseToken, createDispatchInstaller };

@@ -1,11 +1,16 @@
 import preparerModule from './image-preparer.cjs';
+import healthFastpath from './siglip-health-fastpath.cjs';
+import localImages from './siglip-local-images.cjs';
+import timeouts from './home-load-timeouts.cjs';
 const sharedImagePreparer=preparerModule.createImagePreparer();
 
 export function createHomeSiglipRankSender({getScope,budget,readConfig,readToken,readTransfer,url,fflow,fetcher=fetch,prepareImages=sharedImagePreparer}){
+  fetcher=healthFastpath.createHealthFetch({url,fetcher});
+  const imageFetcher=localImages.createLocalImageFetch({trusted:fflow?.baseUrl?.(),fetcher});
   return async function rankHome(body){
     const scope=getScope(),config=readConfig();
     if(!scope||config.enabled!==true||config.siglipEnabled!==true)return null;
-    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeouts.SIGLIP_MS);
     const signal=scope.signal?AbortSignal.any([controller.signal,scope.signal]):controller.signal;
     let ticket;
     async function read(response,limit,charged=false,readSignal=signal,onBytes){
@@ -25,7 +30,7 @@ export function createHomeSiglipRankSender({getScope,budget,readConfig,readToken
       ticket=budget.open();
       const token=readToken();if(token.length<16)return null;
       const headers={Authorization:'Bearer '+token,'Content-Type':'application/json'};
-      const health=JSON.parse((await read(await fetcher(url+'/health',{headers,signal:AbortSignal.any([signal,AbortSignal.timeout(5000)])}),16384)).toString());
+      const health=JSON.parse((await read(await fetcher(url+'/health',{headers,signal:AbortSignal.any([signal,AbortSignal.timeout(timeouts.HEALTH_MS)])}),16384)).toString());
       const mode=/^(1|true|yes|on)$/i.test(String(process.env.VIDFORGE_SIGLIP_LEGACY_TEXT||''))?'legacy':'siglip2';
       if(health.ready!==true||health.model_id!=='google/siglip2-base-patch16-384'||health.model_revision!=='f775b65a79762255128c981547af89addcfe0f88'
         ||!health.text_modes?.includes(mode)||health.multi_query!==true)return null;
@@ -40,8 +45,8 @@ export function createHomeSiglipRankSender({getScope,budget,readConfig,readToken
         fetchImage:async(candidate,imageSignal)=>{
           const target=new URL(candidate.image_url),imageHeaders={'User-Agent':'vidforge-siglip-engine/1.0'};
           if(trusted&&target.origin===trusted.origin&&target.pathname.startsWith('/v1/download/')&&fflow.authHeaders)Object.assign(imageHeaders,fflow.authHeaders());
-          const fetchSignal=AbortSignal.any([imageSignal,AbortSignal.timeout(15000)]);
-          const response=await fetcher(candidate.image_url,{headers:imageHeaders,redirect:'error',signal:fetchSignal});
+          const fetchSignal=AbortSignal.any([imageSignal,AbortSignal.timeout(timeouts.IMAGE_MS)]);
+          const response=await imageFetcher(candidate.image_url,{headers:imageHeaders,redirect:'error',signal:fetchSignal});
           try{
             const type=response.headers.get('content-type');if(type&&!type.toLowerCase().startsWith('image/'))throw Error('image type');
             const bytes=await read(response,imageLimit,true,fetchSignal,n=>{
@@ -62,18 +67,21 @@ export function createHomeSiglipRankSender({getScope,budget,readConfig,readToken
   };
 }
 
-export function createHomeSiglipClient({client,getScope,isRecovery=()=>false,rankHome,newId=()=>crypto.randomUUID()}){
+export function createHomeSiglipClient({client,getScope,isRecovery=()=>false,rankHome,newId=()=>crypto.randomUUID(),stats={completed:0,fallback:0,lastReason:null}}){
   if(client.__vfHomeSiglipTransport)return;
   const original=client.request,server=client.__vfNativeSiglipRequest||original;
   const finished=new Map();let retained=0;
   const remove=id=>{const entry=finished.get(id);if(entry){retained-=entry.bytes;finished.delete(id);}};
   const fallback=reason=>Object.assign(Error('Home SigLIP requires native recovery: '+reason),{code:'VF_HOME_SIGLIP_FALLBACK'});
-  const stats={completed:0,fallback:0,lastReason:null};
   client.request=async function(path,options={}){
     if(isRecovery())return server.call(this,path,options);
     const id=String(path).startsWith('/embed/')?String(path).slice(7):null;
     if(id&&finished.has(id))return finished.get(id).result;
     const scope=getScope();if(!scope)return original.call(this,path,options);
+    // Read-only model/health probes stay native: the RAM gate reads the model state through this
+    // client, and a refusal here made every SigLIP slot count 2.1 GB instead of 512 MB (2026-11-07).
+    if(String(options.method||'GET').toUpperCase()==='GET'&&/^\/(internal\/model\/status|health)$/.test(String(path)))
+      return original.call(this,path,options);
     if(path!=='/embed'||String(options.method||'').toUpperCase()!=='POST'||!Array.isArray(options.body?.candidates))throw fallback('unsupported native endpoint');
     try{
       const result=await rankHome(options.body);

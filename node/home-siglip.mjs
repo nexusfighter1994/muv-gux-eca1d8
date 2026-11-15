@@ -6,12 +6,19 @@ import {createHomeSiglipClient,createHomeSiglipRankSender} from './home-siglip-t
 import {createPodSiglip,combineRank} from './runpod/pod-siglip.mjs';
 import siglipNativeCap from './siglip-native-cap.cjs';
 import pcStatusExtras from './pc-status-extras.cjs';
+import homeOcr from './home-ocr.cjs';
+import recoveryHeadroom from './siglip-recovery-headroom.cjs';
+import serverTotalCap from './siglip-server-total-cap.cjs';
+import healthWindow from './siglip-health-window.cjs';
+import timeouts from './home-load-timeouts.cjs';
 
 export function isHomeSiglipEmbedCallback(callback){
   return [
     '()=>k.runSeparate("siglip embed/rank",J4t(),Ne=>M({query:t,...F?{extraQueries:[...Array.isArray(y)?y:[],r].filter(Boolean),negativeQueries:gxe(yWe,E)}:E?.lookAlikes?.length?{negativeQueries:gxe([],E)}:{},shots:ce,deadlineTs:Ne,signal:I}))',
     '()=>(s.embedAndRank||I9)({query:Ne[0]||b,extraQueries:[...Ne.slice(1),b].filter(Boolean),negativeQueries:gxe(yWe,g),shots:Tn.map(Ra=>({shot_id:Ra.index,start_sec:0,end_sec:0,duration_sec:0,thumbnail_url:Ra.thumbnailUrl})),deadlineTs:Date.now()+3e4})',
+    '()=>(s.embedAndRank||I9)({query:Ne[0]||b,extraQueries:[...Ne.slice(1),b].filter(Boolean),negativeQueries:gxe(yWe,g),shots:Tn.map(Ra=>({shot_id:Ra.index,start_sec:0,end_sec:0,duration_sec:0,thumbnail_url:Ra.thumbnailUrl})),deadlineTs:Date.now()+9e4})', // vf-custom:siglip-rank-deadlines-v1
     '()=>(s.embedAndRank||I9)({query:We,extraQueries:[...Le.slice(1),...ht,b].filter(Boolean),negativeQueries:gxe(se?yWe:[],g),shots:Dn,deadlineTs:Date.now()+12e4})',
+    '()=>(s.embedAndRank||I9)({query:We,extraQueries:[...Le.slice(1),...ht,b].filter(Boolean),negativeQueries:gxe(se?yWe:[],g),shots:Dn,deadlineTs:Date.now()+24e4})', // vf-custom:siglip-rank-deadlines-v1
     '()=>k.runSeparate("siglip embed/rank",R$t(),Re=>M({query:t,...F?{extraQueries:[...Array.isArray(y)?y:[],r].filter(Boolean),negativeQueries:Wbe(VQe,E)}:E?.lookAlikes?.length?{negativeQueries:Wbe([],E)}:{},shots:ae,deadlineTs:Re,signal:I}))',
     '()=>(a.embedAndRank||hH)({query:Re[0]||b,extraQueries:[...Re.slice(1),b].filter(Boolean),negativeQueries:Wbe(VQe,g),shots:wn.map(ws=>({shot_id:ws.index,start_sec:0,end_sec:0,duration_sec:0,thumbnail_url:ws.thumbnailUrl})),deadlineTs:Date.now()+3e4})',
     '()=>(a.embedAndRank||hH)({query:qe,extraQueries:[...Be.slice(1),...vt,b].filter(Boolean),negativeQueries:Wbe(ne?VQe:[],g),shots:Nn,deadlineTs:Date.now()+12e4})',
@@ -72,7 +79,7 @@ export function createHomeSiglipQueue({getState,getCapacity,claim,isAborted=()=>
       candidateActive:candidates(),recovering:[...scopes.values()].filter(s=>s.recovering).length,
       submitted:[...scopes.values()].filter(s=>s.pcSubmitted).length,admitted,completed,failed,checkedAt:new Date().toISOString()};},
   };
-  return q;
+  return recoveryHeadroom.install(q,{getState,getCapacity,claim,scopes,isAborted,newNonce});
 }
 
 export function attachHomeSiglipRecovery(queue,{runNative,runNativeContext,isAborted=()=>false}){
@@ -146,9 +153,10 @@ export function installHomeSiglipAdmission({scheduler,getState,getContext,claim,
     if(value.siglip){value.siglip.active=Math.max(0,value.siglip.active-home.active);value.siglip.home=home;}
     return value;
   };
-  // While the PC SigLIP is healthy the native lane takes at most one embedding (siglip-native-cap.cjs);
-  // the dispatcher getter comes from scheduler-dispatch-install.py.
-  if(globalThis.__vfSchedulerDispatch)globalThis.__vfSchedulerDispatch=siglipNativeCap.wrapDispatch(globalThis.__vfSchedulerDispatch,getAdmission);
+  serverTotalCap.install({queue,scheduler,getState});
+  // The dispatcher getter can be published after this startup hook.
+  const ensureNativeCap=siglipNativeCap.createDispatchInstaller(getAdmission);
+  ensureNativeCap();
   globalThis.__vfHomeSiglipQueue=queue;
   globalThis.__vfHomeSiglipScope=()=>queue.getScope(getContext()?.leases?.get('siglip')?.boosted);
   globalThis.__vfHomeSiglipAttachSignal=signal=>{
@@ -172,33 +180,31 @@ export function installHomeSiglipAdmission({scheduler,getState,getContext,claim,
     entry.handle=function(req,res,next){const send=res.json;res.json=function(body){res.json=send;return send.call(this,{...body,homeSiglipQueue:queue.stats()});};return original.call(this,req,res,next);};
   }
   pcStatusExtras.wrapStatusRoute(app);
-  const timer=schedule(()=>{queue.recoveries().sweep();queue.drain();});timer.unref?.();queue.timer=timer;
+  const timer=schedule(()=>{ensureNativeCap();queue.recoveries().sweep();queue.drain();});timer.unref?.();queue.timer=timer;
   return queue;
 }
 
-export function startHomeSiglipHealth({readConfig,readToken,url,now=Date.now,schedule=fn=>setInterval(fn,3000)}){
-  let health=null,at=0,busy=false;
+export function startHomeSiglipHealth({readConfig,readToken,url,now=Date.now,schedule=fn=>setInterval(fn,3000),initialSnapshot=null}){
+  let health=initialSnapshot?.health||null,at=initialSnapshot?.checkedAt||0,busy=false;
   const probe=async()=>{
     if(busy)return;busy=true;
     try{
       const config=readConfig();
       if(config.enabled!==true||config.siglipEnabled!==true){health=null;return;}
-      const response=await fetch(url+'/health',{headers:{Authorization:'Bearer '+readToken()},signal:AbortSignal.timeout(5000)});
-      if(!response.ok)throw Error('PC health unavailable');
+      const response=await fetch(url+'/health',{headers:{Authorization:'Bearer '+readToken()},signal:AbortSignal.timeout(timeouts.HEALTH_MS)});
+      if(!response.ok){if([401,403].includes(response.status)){health=null;at=0;}throw Error('PC health unavailable');}
       const value=await response.json();
       if(value.ready!==true||value.device!=='cuda'||value.model_id!=='google/siglip2-base-patch16-384'
-        ||value.model_revision!=='f775b65a79762255128c981547af89addcfe0f88'||value.multi_query!==true){health=null;return;}
+        ||value.model_revision!=='f775b65a79762255128c981547af89addcfe0f88'||value.multi_query!==true){health=null;at=0;return;}
       health=value;at=now();
-    // A probe lost to event-loop lag keeps the last good health; getCapacity still expires it after 10 s.
-    }catch{}finally{busy=false;}
+    // Use the same bounded readiness window as the native fallback admission.
+    }catch(error){if(['ECONNREFUSED','ENOENT','EACCES'].includes(error?.code||error?.cause?.code)){health=null;at=0;}}finally{busy=false;}
   };
   const timer=schedule(probe);timer.unref?.();void probe();
   return {getCapacity(){
     try{
-      const config=readConfig();if(config.enabled!==true||config.siglipEnabled!==true||!health||now()-at>=10000)return 0;
-      const own=globalThis.__vfHomeSiglipQueue?.statsSubmitted?.()||0;
-      const external=Math.max(0,(Number(health.active_tasks)||0)-own);
-      return Math.max(0,Math.min(25,config.siglipConcurrency,health.configured_concurrency)-external);
+      return healthWindow.capacity({config:readConfig(),health,checkedAt:at,now:now(),
+        submitted:globalThis.__vfHomeSiglipQueue?.statsSubmitted?.()||0});
     }catch{return 0;}
   },snapshot:()=>({health,checkedAt:at}),timer};
 }
@@ -224,7 +230,9 @@ export function installHomeSiglipStartup(deps){
     createHomeSiglipClient({client,getScope:globalThis.__vfHomeSiglipScope,isRecovery:globalThis.__vfHomeSiglipRecovery,rankHome});
     globalThis.__vfHomeSiglipTransportStats=client.__vfHomeSiglipTransport.stats;
     globalThis.__vfHomeSiglipHealth=health;
-    queue.health=health;clearInterval(timer);
+    queue.health=health;
+    homeOcr.start({scheduler:deps.scheduler,client,fflow,queue});
+    clearInterval(timer);
   };
   timer=setInterval(()=>{try{connect();}catch(error){console.warn('[home-siglip] startup deferred',error?.name);}},1000);timer.unref();
   globalThis.__vfHomeSiglipStartup={timer};connect();

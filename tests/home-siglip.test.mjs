@@ -90,7 +90,7 @@ test('already aborted callback signal is combined into the Home lease before tra
   delete globalThis.__vfHomeSiglipRecovery;delete globalThis.__vfHomeSiglipBuffers;
 });
 
-test('Home health keeps the last good probe through a lost probe; capacity expires 10 s after it', async () => {
+test('Home health keeps the last good probe through a lost probe; expires with the 120 s native readiness window', async () => {
   const savedFetch = globalThis.fetch;
   let clock = 1000, fail = false;
   const ok = {ready: true, device: 'cuda', model_id: 'google/siglip2-base-patch16-384', model_revision: 'f775b65a79762255128c981547af89addcfe0f88',
@@ -106,6 +106,8 @@ test('Home health keeps the last good probe through a lost probe; capacity expir
     assert.equal(health.getCapacity(), 20, 'a lost probe keeps the last good health');
     assert.equal(health.snapshot().checkedAt, 1000);
     clock += 7000;
-    assert.equal(health.getCapacity(), 0, 'expired 10 s after the last success');
+    assert.equal(health.getCapacity(), 20, 'API lag must not close Home before native readiness expires');
+    clock = 121000;
+    assert.equal(health.getCapacity(), 0, 'expired 120 s after the last success');
   } finally { globalThis.fetch = savedFetch; }
 });

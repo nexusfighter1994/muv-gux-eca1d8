@@ -54,8 +54,8 @@ def owned_snapshot(rates=None, link=None):
                                       'options': {'rate': rates[key] * 125000, **parameters}}]
         for port in (18191, 18194):
             keys = {'eth_type': 'ipv4', 'ip_proto': 'tcp',
-                    'src_ip': '10.0.3.21' if direction == 'ingress' else '10.0.3.1',
-                    'dst_ip': '10.0.3.1' if direction == 'ingress' else '10.0.3.21',
+                    'src_ip': '10.0.3.16' if direction == 'ingress' else '10.0.3.1',
+                    'dst_ip': '10.0.3.1' if direction == 'ingress' else '10.0.3.16',
                     'dst_port' if direction == 'ingress' else 'src_port': port}
             snapshot['filters'][direction].append({'kind': 'flower', 'protocol': 'ip', 'pref': 31000 + port,
                 'chain': 0, 'options': {'handle': 1, 'keys': keys, 'skip_hw': True,
@@ -65,6 +65,14 @@ def owned_snapshot(rates=None, link=None):
 
 
 class TestLimiter(unittest.TestCase):
+    def test_current_vidforge_address_never_targets_old_clipvault_address(self):
+        self.assertEqual(module.VF_IP, '10.0.3.16')
+        self.assertEqual(module.API_ORIGIN, 'http://10.0.3.16:8000')
+        with self.assertRaises(module.SafetyError):
+            module.ApiClient('/unused-token', origin='http://10.0.3.30:8000')
+        with self.assertRaises(module.SafetyError):
+            module.ApiClient('/unused-token', origin='http://10.0.3.21:8000')
+
     def setUp(self):
         self.assertIsNotNone(module, 'Required host limiter implementation is missing')
 
@@ -116,8 +124,8 @@ class TestLimiter(unittest.TestCase):
         commands = module.build_plan(identity(), empty_snapshot(), {'version': 1, 'links': {}, 'last_rates': None}, RATES).commands
         for c in [x for x in commands if x[:3] == ['tc', 'filter', 'add']]:
             ingress = 'ingress' in c[:c.index('flower')]
-            self.assertEqual(c[c.index('src_ip') + 1], '10.0.3.21/32' if ingress else '10.0.3.1/32')
-            self.assertEqual(c[c.index('dst_ip') + 1], '10.0.3.1/32' if ingress else '10.0.3.21/32')
+            self.assertEqual(c[c.index('src_ip') + 1], '10.0.3.16/32' if ingress else '10.0.3.1/32')
+            self.assertEqual(c[c.index('dst_ip') + 1], '10.0.3.1/32' if ingress else '10.0.3.16/32')
 
     def test_restart_is_idempotent(self):
         self.assertEqual(module.build_plan(identity(), owned_snapshot(), owned_state(), RATES).commands, [])

@@ -6,8 +6,12 @@ export function isHomeLibraryTrimCallback(callback){
   ].includes(String(callback));
 }
 
+const TRIM_INSTALLED=Symbol.for('vidforge.home-library-trim.installed');
 export function installHomeLibraryTrim({scheduler,getSlotMeasurer,setSlotMeasurer,getContext}){
-  if(scheduler.run.__vfHomeLibraryTrim)return;
+  if(scheduler[TRIM_INSTALLED])return;
+  if(scheduler.run.__vfHomeLibraryTrim){
+    Object.defineProperty(scheduler,TRIM_INSTALLED,{value:true,configurable:true});return;
+  }
   const originalSampler=getSlotMeasurer();
   setSlotMeasurer(function(request){
     const sample=originalSampler?.call(this,request);
@@ -33,4 +37,5 @@ export function installHomeLibraryTrim({scheduler,getSlotMeasurer,setSlotMeasure
   };
   run.__vfHomeLibraryTrim=true;run.__vfHomeDirect=originalRun.__vfHomeDirect;
   scheduler.run=run;
+  Object.defineProperty(scheduler,TRIM_INSTALLED,{value:true,configurable:true});
 }

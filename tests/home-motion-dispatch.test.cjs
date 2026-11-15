@@ -71,7 +71,7 @@ test('four simultaneous Home failures submit at most two counted native recoveri
 
 test('staging estimate applies only to Home Motion, never to native RAM requests',()=>{
   const wrapped=api.wrapEstimate(r=>({mb:r.resourceKey==='frameshift'?3000:100,learnable:false}));
-  assert.equal(wrapped({resourceKey:'motionHome'}).mb,1024);
+  assert.equal(wrapped({resourceKey:'motionHome'}).mb,256); // vf-custom:motion-staging-256-v1
   assert.equal(wrapped({resourceKey:'frameshift'}).mb,3000);
   assert.equal(wrapped({resourceKey:'ffmpeg'}).mb,100);
 });
@@ -119,7 +119,7 @@ test('installation keeps native gate, scopes, demand and remote counts correct',
       finally{sample.finish();lease.released=true;await release('render',jobId,success,resource,lease.boosted);}
     }};
   const previous={q:globalThis.__vfHomeMotionQueue,r:globalThis.__vfFrameshiftRoute,h:globalThis.__vfHomeCapabilities};
-  globalThis.__vfFrameshiftRoute={stats:{active:0},call:(name,fn,self,args)=>Reflect.apply(fn,self,args)};
+  globalThis.__vfFrameshiftRoute={stats:{active:4,homeInFlight:0},call:(name,fn,self,args)=>Reflect.apply(fn,self,args)};
   globalThis.__vfHomeCapabilities={ready:true,checkedAt:Date.now()};
   // Availability injection uses the factory in other tests; install reads Linux meminfo.
   const fs=require('node:fs'),read=fs.readFileSync;fs.readFileSync=function(file,...args){return file==='/proc/meminfo'?'MemAvailable: 22000000 kB\n':read.call(this,file,...args);};
@@ -130,6 +130,10 @@ test('installation keeps native gate, scopes, demand and remote counts correct',
       getSlotMeasurer:()=>sampler,setSlotMeasurer:f=>sampler=f,getEstimate:()=>estimate,setEstimate:f=>estimate=f,
       isMock:()=>false,getSettings:()=>({homeMotion:true,motionSlots:4}),remote,
       runIndependent:fn=>{const c=als.getStore(),lanes=new Set(c.lanes),leases=new Map(c.leases);lanes.delete('render');leases.delete('render');return als.run({...c,lanes,leases},fn);}});
+    assert.equal(q.stats().capacity,4,'server-only route fallbacks must not occupy Home slots');
+    globalThis.__vfFrameshiftRoute.stats.homeInFlight=2;
+    assert.equal(q.stats().capacity,2,'real external Home targets still consume capacity');
+    globalThis.__vfFrameshiftRoute.stats.homeInFlight=0;
     const A={render:async()=>{const end=remote.begin('frameshift');end();return q.native(()=>{localCalls++;return 'original-output';});}},D={};
     const result=scheduler.run('job','frameshift',()=>A.render(D));q.drain();
     const later={...waiter('job','motion-native'),seq:++seq};state.waiters.push(later);
@@ -147,7 +151,7 @@ test('installation keeps native gate, scopes, demand and remote counts correct',
     q.drain();assert.equal(state.waiters.length,3,'recovery must not return to Home');
     nativeAllowed=true;claim(recovery);assert.equal(await result,'original-output');
     assert.equal(localCalls,1);assert.equal(successes,1,'native demand counted only once');assert.equal(state.activeTotal,0);
-    assert.deepEqual(seenEstimates,[1024,3000]);assert.equal(q.stats().active,0);
+    assert.deepEqual(seenEstimates,[256,3000]);assert.equal(q.stats().active,0);
   }finally{
     clearInterval(q?.timer);fs.readFileSync=read;
     if(previous.q)globalThis.__vfHomeMotionQueue=previous.q;else delete globalThis.__vfHomeMotionQueue;

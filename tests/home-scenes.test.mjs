@@ -4,7 +4,7 @@ import {wrapHomeScenes,installHomeScenes} from '../node/home-scenes.mjs';
 function setup(result){const calls=[],scope={kind:'video-trim',jobId:'x',candidate:true},stats={attempted:0,gpu:0,cpu:0,fallback:0};
   const fn=wrapHomeScenes(async()=>{calls.push('native');return 'native'}, {
     getContext:()=>({leases:new Map([['ffmpeg',{boosted:scope}]])}),validScope:()=>true,enabled:()=>true,stats,
-    runCli:async()=>{calls.push('home');return result},getPublisher:async()=>()=>'/preview',record:()=>{},
+    runCli:async()=>{calls.push('home');return result},publishPreview:()=>'/preview',record:()=>{},
     runRecovery:async(s,fn)=>{calls.push('permit');return fn()},runNativeContext:(s,fn)=>fn()});return {fn,calls,stats};}
 test('CPU/GPU results retain exact cuts and generate previews',async()=>{
  for(const backend of ['CPU scenes','NVDEC + CPU scenes']){const s=setup({offloaded:true,verified:true,backend,videoFps:30,projectSlug:'real-project-123',
@@ -16,6 +16,12 @@ test('unavailable Home uses counted original server fallback',async()=>{const s=
  assert.equal(await s.fn({deadlineTs:Date.now()+240000}),'native');assert.deepEqual(s.calls,['home','permit','native']);});
 test('short deadlines preserve native budget',async()=>{const s=setup({});await s.fn({deadlineTs:Date.now()+60000});
  assert.deepEqual(s.calls,['permit','native']);});
+test('Home budget is the analysis remainder minus the native reserve, capped at 360 s',async()=>{
+ const seen=[];const s=setup({offloaded:false});const fn=wrapHomeScenes(async()=>'native',{
+  getContext:()=>({leases:new Map([['ffmpeg',{boosted:{kind:'video-trim',jobId:'x'}}]])}),validScope:()=>true,enabled:()=>true,stats:s.stats,
+  runCli:async r=>{seen.push(r.budgetMs);return {offloaded:false}},runRecovery:async(sc,f)=>f(),runNativeContext:(sc,f)=>f()});
+ await fn({deadlineTs:Date.now()+400000});await fn({deadlineTs:Date.now()+900000});await fn({deadlineTs:Date.now()+130000});
+ assert.equal(seen.length,2);assert.ok(Math.abs(seen[0]-280000)<1000,String(seen[0]));assert.equal(seen[1],360000);});
 test('out of scope previews are rejected',async()=>{const s=setup({offloaded:true,verified:true,backend:'CPU scenes',shots:[{thumbnailPath:'/etc/passwd'}]});
  await s.fn({deadlineTs:Date.now()+240000});assert.deepEqual(s.calls,['home','permit','native']);});
 test('cancelled work never renders or falls back',async()=>{const s=setup({});const c=new AbortController();c.abort(Error('Stopped'));

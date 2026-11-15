@@ -31,7 +31,7 @@ test('SigLIP admission and recovery counters supplement real worker telemetry', 
   try {
     render({ config, health, homeSiglipQueue });
     assert.equal(row.querySelector('.vc-faint').textContent,
-      '2/14 busy | 101 completed (PC total) | 8/25 admitted | 19 eligible queued | 3 native recoveries');
+      '2/14 busy | 101 completed (PC total) | 5/25 Home admitted | 19 embedding queued | 3 native recoveries');
     assert.equal(row.classList.contains('vc-worker-row--busy'), true);
   } finally { dom.window.close(); }
 });
@@ -53,7 +53,7 @@ test('admitted Home work does not mark an idle or unavailable worker busy', () =
   try {
     render({ config, health: { siglip: { ...health.siglip, active: 0 } }, homeSiglipQueue });
     assert.match(row.textContent, /0\/14 busy/);
-    assert.match(row.textContent, /8\/25 admitted/);
+    assert.match(row.textContent, /5\/25 Home admitted/);
     assert.equal(row.classList.contains('vc-worker-row--busy'), false);
     render({ config, homeSiglipQueue });
     assert.match(row.textContent, /Status unavailable \| Busy unavailable \| Completed unavailable/);
@@ -66,9 +66,9 @@ test('zero queue counters are shown and malformed counts remain unknown', () => 
   const { dom, render, row } = fixture();
   try {
     render({ config, health, homeSiglipQueue: { capacity: 14, active: 0, queued: 0, recovering: 0 } });
-    assert.match(row.textContent, /0\/14 admitted \| 0 eligible queued \| 0 native recoveries/);
+    assert.match(row.textContent, /0\/14 Home admitted \| 0 embedding queued \| 0 native recoveries/);
     render({ config, health, homeSiglipQueue: { capacity: '25', active: -1, queued: 1.5 } });
-    assert.match(row.textContent, /\?\/\? admitted \| \? eligible queued \| \? native recoveries/);
+    assert.match(row.textContent, /\?\/\? Home admitted \| \? embedding queued \| \? native recoveries/);
   } finally { dom.window.close(); }
 });
 
@@ -97,5 +97,17 @@ test('server SigLIP embeddings and the PC backlog are shown while the native cap
   try {
     render({ config, health, homeSiglipQueue, siglipServer: { embeds: 1, max: 1, waitingForPc: 1486 } });
     assert.match(row.querySelector('.vc-faint').textContent, /server 1\/1 embeddings \| 1486 waiting for PC$/);
+  } finally { dom.window.close(); }
+});
+
+test('total server cap replaces embedding-only telemetry and shows offline restoration', () => {
+  const { dom, render, row } = fixture();
+  try {
+    for (const [homeConnected, active, max] of [[true, 1, 1], [false, 6, 10]]) {
+      render({config, health, homeSiglipQueue: {...homeSiglipQueue, server: {homeConnected, active, max}},
+        siglipServer: {embeds: 0, max: 3, waitingForPc: 10}});
+      assert.ok(row.textContent.endsWith(`server ${active}/${max} total${homeConnected ? '' : ' (PC offline)'}`));
+      assert.doesNotMatch(row.textContent, /server 0\/3 embeddings/);
+    }
   } finally { dom.window.close(); }
 });

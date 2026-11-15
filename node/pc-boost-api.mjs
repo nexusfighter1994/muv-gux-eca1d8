@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
+import homeLoadTimeouts from './home-load-timeouts.cjs';
 
 export const DEFAULT_CONFIG = Object.freeze({
   enabled: false,
@@ -16,8 +17,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   // render's deadline Home may use before the server renders it itself (fresh full deadline).
   motionSlots: 2,
   motionHomeShare: 70,
-  // SigLIP embeddings the server's own engine runs at once while the PC SigLIP is ready
-  // (node/siglip-native-cap.cjs); the rest waits for the PC. OCR is not affected.
+  // Total native SigLIP lane cap while Home is ready (embeddings, OCR and recovery).
+  // Legacy zero keeps embeddings on Home and one counted OCR/recovery slot on the server.
   siglipServerEmbeds: 1,
   // Job order: jobs before segment rendering first (script, voiceover, audio, chunk planning),
   // finish-first from segment rendering on (node/scheduling-settings.cjs).
@@ -513,7 +514,7 @@ export function installPcBoost({ app, db, requireOwner, runtimePath = RUNTIME_PA
     // The background capacity probe refreshes this every 5 s with a patient deadline; the UI
     // reuses it instead of firing its own 900 ms probe, which flickered rows to "offline".
     if (healthCached && Date.now() - healthTime < 15000) return healthCached;
-    if (!healthPromise) healthPromise = workers.health({ deadlineMs: 5000 }).then(value => {
+    if (!healthPromise) healthPromise = workers.health({ deadlineMs: homeLoadTimeouts.HEALTH_MS }).then(value => {
       healthCached = value;
       healthTime = Date.now();
       return value;
@@ -588,7 +589,7 @@ export function installPcBoost({ app, db, requireOwner, runtimePath = RUNTIME_PA
   };
   let probing = false;
   const publishExtra = async () => {
-    if (probing) return; // a slow probe (up to 5 s) must not overlap the next 3 s tick
+    if (probing) return; // A load-delayed probe must not overlap the next 3 s tick.
     probing = true;
     try { await probeOnce(); } finally { probing = false; }
   };
@@ -596,11 +597,10 @@ export function installPcBoost({ app, db, requireOwner, runtimePath = RUNTIME_PA
     let extra = globalThis.__vfPcBoostFfmpegExtra || 0;
     try {
       const config = store?.get();
-      // Own probe with a 5 s deadline: the home link needs 1-2 s under load, which made the
-      // 900 ms UI deadline flap. The UI keeps its short deadline and reuses this result.
+      // Status has a bounded load allowance; the UI reuses this same result.
       let health;
       if (config?.enabled) {
-        health = await workers.health({ deadlineMs: 5000 });
+        health = await workers.health({ deadlineMs: homeLoadTimeouts.HEALTH_MS });
         healthCached = health;
         healthTime = Date.now();
       }

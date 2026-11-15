@@ -17,7 +17,7 @@ function statusExtras() {
   return {
     homeMotionQueue: queue ? { ...queue, serverStagingMb, serverStagingAllocations } : null,
     homeMotion: route ? {
-      slots: count(route.limits?.slots), inFlight: count(route.active),
+      slots: count(route.limits?.slots), inFlight: count(route.homeInFlight) ?? count(route.active),
       opaqueHome: count(route.opaque?.home), alphaHome: count(route.alpha?.home), pod: count(route.pod?.home),
       native: sum('native'), tried: sum('tried'),
     } : null,

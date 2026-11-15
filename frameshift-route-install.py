@@ -85,6 +85,8 @@ def motion_dependencies():
 
 
 def patch_motion_admission(text):
+    import runpy
+    text = runpy.run_path(str(Path(__file__).with_name('home-motion-validation-install.py')))['patch_node'](text)
     if MOTION_MARKER in text:
         if text.count(MOTION_MARKER) != 1:
             raise RuntimeError('Duplicate Motion admission hook')

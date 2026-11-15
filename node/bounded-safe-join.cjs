@@ -55,8 +55,10 @@ function createSafeJoin({ probe, run, validateCopy }) {
         checkAbort(signal);
         const file = path.join(work, 'normalized-' + i + '.mov'), inputDuration = number(video(inputInfo[i]).duration);
         const videoFilter = `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=${fps},format=yuv420p,setpts=PTS-STARTPTS[v]`;
-        const audioFilter = `aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=0:${inputDuration.toFixed(6)},asetpts=PTS-STARTPTS[a]`;
-        const filters = `[0:v:0]${videoFilter};` + (audio(inputInfo[i]) ? `[0:a:0]${audioFilter}` : `anullsrc=r=48000:cl=stereo,atrim=0:${inputDuration.toFixed(6)},asetpts=PTS-STARTPTS[a]`);
+        // AAC timestamp rounding must not shorten the normalized PCM sample sequence.
+        const audioSamples = Math.round(inputDuration * 48000);
+        const audioFilter = `aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=end_sample=${audioSamples},asetpts=N/SR/TB[a]`;
+        const filters = `[0:v:0]${videoFilter};` + (audio(inputInfo[i]) ? `[0:a:0]${audioFilter}` : `anullsrc=r=48000:cl=stereo,atrim=end_sample=${audioSamples},asetpts=N/SR/TB[a]`);
         emit({ step: 'finalAssembly', message: `Safe join: normalizing chunk ${i + 1}/${chunkPaths.length} (one decoder).` });
         // PCM avoids one AAC priming delay per chunk. AAC is encoded exactly once in the final join.
         await execute(['-i', chunkPaths[i], '-filter_complex', filters, '-map', '[v]', '-map', '[a]',

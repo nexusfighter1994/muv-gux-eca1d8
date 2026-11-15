@@ -10,13 +10,16 @@ from pathlib import Path
 import sys
 
 
-CONTRACT_VERSION = "vf-custom-41-20261023"
+CONTRACT_VERSION = "vf-custom-52-20261104"
 REQUIRED_HOOKS = (
+    "python.memoryReclaim",
     "fflow.ffmpegOffload",
     "fflow.nativeFxDirectoryProtection",
     "fflow.homeQueue",
     "fflow.sceneOffload",
     "fflow.slotCleanup",
+    "fflow.fxEncodeWait",
+    "fflow.fxBudget",
     "fflow.tempDirectoryRetention",
     "node.ai33SttEnvelope",
     "node.autoRetry",
@@ -30,6 +33,7 @@ REQUIRED_HOOKS = (
     "node.gpuRenderEvents",
     "node.homeQueue",
     "node.chunkPollRecovery",
+    "node.cgroupPressureAccounting",
     "node.homeMap",
     "node.homeMotion",
     "node.lane",
@@ -47,11 +51,24 @@ REQUIRED_HOOKS = (
     "node.surplusFirst",
     "node.surplusRetries",
     "node.surplusWait",
+    "node.surplusMarketplaceRetry",
     "node.thumbnailOpenlux",
     "node.thumbnailIdentity",
+    "node.thumbnailResultGuard",
+    "node.voiceJaKoCompatibility",
+    "node.sourceTextAlignment",
     "node.wake",
     "node.workerTarget",
     "ui.inject",
+    "node.openaiImages",
+    "node.renderPrerequisite",
+    "node.visionDeepseek",
+    "node.surplusVisionBudget",
+    "node.realHeadroomGate",
+    "node.surplusModelKeys",
+    "node.sfxCloseOnce",
+    "node.ffmpegDefaultTimeout",
+    "ui.openaiImages",
     "render.infographicTimeline",
 )
 OPTIONAL_HOOKS = ("node.bundle",)  # Informational already-patched marker only.

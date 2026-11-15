@@ -4,6 +4,10 @@ import {createHomeSiglipClient,createHomeSiglipRankSender} from '../node/home-si
 import {createHomeSiglipBufferBudget} from '../node/home-siglip.mjs';
 import {createHomeSiglipQueue,attachHomeSiglipRecovery} from '../node/home-siglip.mjs';
 import {AsyncLocalStorage} from 'node:async_hooks';
+import fastpath from '../node/siglip-health-fastpath.cjs';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 test('Home never submits server work on GPU failure or unsupported OCR',async()=>{
   const scope={jobId:'job'};let server=0;
@@ -63,4 +67,75 @@ test('PC disappearance cannot start server inference before native RAM admission
   await new Promise(r=>setTimeout(r,15));assert.equal(server,0);assert.equal(entered,0);
   admit();assert.deepEqual(await pending,expected);assert.equal(server,2);
   q.release(scope,true);assert.equal(q.stats().active,0);
+});
+
+test('real hot client preserves old cache and shares counters while using new namespace',async()=>{
+  const scope={};let finish;
+  const client={request:async()=> 'native'};
+  const expected={status:'completed',results:[{id:'1',score:.123456}]};
+  createHomeSiglipClient({client,getScope:()=>scope,rankHome:()=>new Promise(r=>finish=r),newId:()=> 'old'});
+  const pending=client.request('/embed',{method:'POST',body:{candidates:[{id:'1'}]}});
+  const stats=client.__vfHomeSiglipTransport.stats;
+  fastpath.installClient({client,createClient:createHomeSiglipClient,getScope:()=>scope,isRecovery:()=>false,rankHome:async()=>expected});
+  finish(expected);const old=await pending;
+  assert.deepEqual(await client.request('/embed/'+old.task_id),expected);
+  const fresh=await client.request('/embed',{method:'POST',body:{candidates:[{id:'1'}]}});
+  assert.match(fresh.task_id,/^vfpc-home-fast100-/);
+  assert.deepEqual(await client.request('/embed/'+fresh.task_id),expected);
+  assert.equal(stats.completed,2);assert.equal(stats.fallback,0);
+});
+
+test('cached health still enforces model identity, config and transfer compatibility',async()=>{
+  const saved=globalThis.__vfHomeSiglipHealth;
+  const budget=createHomeSiglipBufferBudget();let posts=0;
+  globalThis.__vfHomeSiglipHealth={snapshot:()=>({checkedAt:Date.now(),health:{ready:true,model_id:'wrong'}})};
+  try{
+    const rank=createHomeSiglipRankSender({getScope:()=>({}),budget,readConfig:()=>({enabled:true,siglipEnabled:true}),readToken:()=> 'private-test-token',
+      readTransfer:()=>({siglipMaxImageMb:100}),url:'http://10.0.3.1:18194',fflow:null,
+      fetcher:async()=>{posts++;throw Error('must not post');}});
+    assert.equal(await rank({candidates:[]}),null);assert.equal(posts,0);assert.equal(budget.stats().reservedBytes,0);
+  }finally{globalThis.__vfHomeSiglipHealth=saved;}
+});
+
+test('local fast path preserves original bytes and transfer/buffer/cancellation limits',async()=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'vf-rank-')),old=process.env.FFLOW_STORAGE_DIR;
+  await fs.mkdir(path.join(root,'outputs'));process.env.FFLOW_STORAGE_DIR=root;
+  const bytes=Buffer.alloc(1024,27);await fs.writeFile(path.join(root,'outputs/a.jpg'),bytes);
+  const budget=createHomeSiglipBufferBudget(),scope={};let posts=0;
+  const fetcher=async(url,options)=>{
+    if(url.endsWith('/health'))return Response.json({ready:true,model_id:'google/siglip2-base-patch16-384',model_revision:'f775b65a79762255128c981547af89addcfe0f88',text_modes:['siglip2'],multi_query:true,active_tasks:0,transferLimits:{siglipMaxImageMb:100}});
+    assert.ok(url.endsWith('/rank'),'No image HTTP request expected');posts++;
+    assert.deepEqual(Buffer.from(JSON.parse(options.body).candidates[0].image_base64,'base64'),bytes);
+    return Response.json({status:'completed',results:[{id:'1',score:.5}]});
+  };
+  try{
+    const rank=createHomeSiglipRankSender({getScope:()=>scope,budget,readConfig:()=>({enabled:true,siglipEnabled:true,siglipConcurrency:25}),readToken:()=> 'private-test-token',readTransfer:()=>({siglipMaxImageMb:1}),url:'http://pc',fflow:{baseUrl:()=> 'http://127.0.0.1:8091'},fetcher});
+    const body={query:'original',candidates:[{id:'1',image_url:'http://127.0.0.1:8091/v1/download/outputs/a.jpg'}]};
+    await rank(body);assert.equal(posts,1);assert.equal(budget.stats().reservedBytes,0);
+    await fs.writeFile(path.join(root,'outputs/a.jpg'),Buffer.alloc(2*1024*1024));
+    await assert.rejects(rank(body),/image transfer limit/);assert.equal(posts,1);assert.equal(budget.stats().reservedBytes,0);
+  }finally{if(old===undefined)delete process.env.FFLOW_STORAGE_DIR;else process.env.FFLOW_STORAGE_DIR=old;await fs.rm(root,{recursive:true,force:true});}
+});
+
+test('101 upgrade retains the 100 cache owner and exact counters',async()=>{
+  const scope={},client={request:async()=> 'native'},result={status:'completed',results:[]};
+  createHomeSiglipClient({client,getScope:()=>scope,rankHome:async()=>result});
+  const deps={client,createClient:createHomeSiglipClient,getScope:()=>scope,isRecovery:()=>false,rankHome:async()=>result};
+  fastpath.installClient(deps);const old=await client.request('/embed',{method:'POST',body:{candidates:[]}});
+  fastpath.installClient({...deps,version:101});const fresh=await client.request('/embed',{method:'POST',body:{candidates:[]}});
+  assert.match(fresh.task_id,/fast101-/);assert.deepEqual(await client.request('/embed/'+old.task_id),result);
+  assert.deepEqual(await client.request('/embed/'+fresh.task_id),result);assert.equal(client.__vfHomeSiglipTransport.stats.completed,2);
+});
+
+test('model status and health probes inside a Home scope stay native, other endpoints stay refused',async()=>{
+  const scope={jobId:'job'};const calls=[];
+  const client={request:async(p,o)=>{calls.push(p);return {loaded:true,rss_mb:900};}};
+  createHomeSiglipClient({client,getScope:()=>scope,rankHome:async()=>null});
+  assert.deepEqual(await client.request('/internal/model/status',{timeoutMs:3000}),{loaded:true,rss_mb:900});
+  assert.deepEqual(await client.request('/health'),{loaded:true,rss_mb:900});
+  assert.deepEqual(calls,['/internal/model/status','/health']);
+  await assert.rejects(client.request('/internal/model/unload',{method:'POST',timeoutMs:10000}),{code:'VF_HOME_SIGLIP_FALLBACK'});
+  await assert.rejects(client.request('/internal/model/status',{method:'POST'}),{code:'VF_HOME_SIGLIP_FALLBACK'});
+  await assert.rejects(client.request('/ocr',{method:'POST',body:{}}),{code:'VF_HOME_SIGLIP_FALLBACK'});
+  assert.equal(calls.length,2);
 });

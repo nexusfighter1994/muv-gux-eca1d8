@@ -2,15 +2,24 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { createWorkerClient } from '../node/pc-boost-api.mjs';
+import homeLoadTimeouts from '../node/home-load-timeouts.cjs';
 
 function coldHealth(workers) {
   const text = fs.readFileSync(new URL('../node/pc-boost-api.mjs', import.meta.url), 'utf8');
   const start = text.indexOf('const getHealth = async () => {');
   const end = text.indexOf('const reconcile =', start);
   assert.ok(start > 0 && end > start);
-  return new Function('workers', 'let healthPromise,healthCached,healthTime=0;'
-    + text.slice(start, end) + ';return getHealth;')(workers);
+  return new Function('workers', 'homeLoadTimeouts', 'let healthPromise,healthCached,healthTime=0;'
+    + text.slice(start, end) + ';return getHealth;')(workers,homeLoadTimeouts);
 }
+
+test('cold UI and background worker request use the patient bounded health policy',async()=>{
+  let calls=0;
+  const get=coldHealth({health:async opts=>{assert.equal(opts.deadlineMs,120000);calls++;return {checkedAt:'fixture'};}});
+  await Promise.all([get(),get()]);await get();assert.equal(calls,1);
+  const text=fs.readFileSync(new URL('../node/pc-boost-api.mjs',import.meta.url),'utf8');
+  assert.equal(text.split('workers.health({ deadlineMs: homeLoadTimeouts.HEALTH_MS })').length-1,2);
+});
 
 function response() {
   return new Response(JSON.stringify({ ready: true, protocolVersion: 2, cpuCapacity: 16,

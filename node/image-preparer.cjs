@@ -1,5 +1,10 @@
 'use strict';
 
+// Candidate images partly come from slow external hosts (sorae.info, wikimedia, ...). A global cap of
+// 14 fetches for all Home SigLIP requests kept 17-20 scopes "preparing" while the Home GPU idled
+// (2026-11-07: ~23 ranks/min, queue 2,663). Cap = 2 x siglipConcurrency (max 48), 8 per request.
+const MAX_ACTIVE=48,PER_REQUEST=8;
+
 // Share this instance across senders and hot-wrapper generations.
 function createImagePreparer() {
   let active=0;
@@ -9,7 +14,7 @@ function createImagePreparer() {
       const item=waiting[i];
       if(item.signal.aborted){waiting.splice(i,1);item.reject(item.signal.reason);continue;}
       let cap;
-      try{cap=Math.max(1,Math.min(14,Math.floor(Number(item.readLimit())||1)));}
+      try{cap=Math.max(1,Math.min(MAX_ACTIVE,2*Math.floor(Number(item.readLimit())||1)));}
       catch(error){waiting.splice(i,1);item.signal.removeEventListener('abort',item.abort);item.reject(error);continue;}
       if(active>=cap){i++;continue;}
       waiting.splice(i,1);active++;item.signal.removeEventListener('abort',item.abort);
@@ -44,11 +49,11 @@ function createImagePreparer() {
         } finally {release?.();}
       }
     }
-    await Promise.allSettled(Array.from({length:Math.min(4,candidates.length)},worker));
+    await Promise.allSettled(Array.from({length:Math.min(PER_REQUEST,candidates.length)},worker));
     signal.throwIfAborted();
     if(controller.signal.aborted)throw failure;
     return output;
   };
 }
 
-module.exports={createImagePreparer};
+module.exports={createImagePreparer,MAX_ACTIVE,PER_REQUEST};

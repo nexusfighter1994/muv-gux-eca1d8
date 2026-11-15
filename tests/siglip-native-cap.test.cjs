@@ -87,12 +87,12 @@ test('refusals keep native semantics and a lost release cannot pin the cap', () 
   assert.equal(cap.wrapDispatch(d2, () => null), d2, 'idempotent');
 });
 
-test('readiness: a successful Home probe within 30 s, even if the latest probe failed', () => {
+test('readiness: a successful Home probe within 120 s, even if the latest probe failed', () => {
   const cap = fresh(), now = 1_000_000;
   const saved = globalThis.__vfHomeSiglipHealth;
   try {
     for (const [snapshot, ready] of [[{ health: null, checkedAt: now - 5000 }, true], [{ health: {}, checkedAt: now - 29000 }, true],
-      [{ health: {}, checkedAt: now - 31000 }, false], [{ health: null, checkedAt: 0 }, false]]) {
+      [{ health: {}, checkedAt: now - 90000 }, true], [{ health: {}, checkedAt: now - 120000 }, false], [{ health: null, checkedAt: 0 }, false]]) {
       globalThis.__vfHomeSiglipHealth = { snapshot: () => snapshot };
       assert.equal(cap.homeReady(now), ready, JSON.stringify(snapshot));
     }

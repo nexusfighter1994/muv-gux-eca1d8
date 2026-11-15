@@ -24,7 +24,7 @@ export async function render(native,context,options){
 function overlayDuration(html){
   if(typeof html!=='string'||Buffer.byteLength(html)>2*1024*1024)return null;
   // Recognize only the original Za overlay header, not arbitrary HTML or script text.
-  const root=/^<!doctype html>\s*<html>\s*<head>\s*<meta charset="utf-8">\s*<style>[^<]*<\/style>\s*<\/head>\s*<body>\s*<div id="root" data-composition-id="main" data-start="0" data-duration="([0-9]+(?:\.[0-9]+)?)" data-width="1920" data-height="1080">/.exec(html);
+  const root=/^<!doctype html>\s*<html(?: lang="[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?")?>\s*<head>\s*<meta charset="utf-8">\s*(?:<style>[^<]*<\/style>\s*)+<\/head>\s*<body>\s*<div id="root" data-composition-id="main" data-start="0" data-duration="([0-9]+(?:\.[0-9]+)?)" data-width="1920" data-height="1080">/.exec(html);
   if(!root||(html.match(/\bdata-composition-id\s*=/gi)||[]).length!==1)return null;
   const duration=Number(root[1]);
   return Number.isFinite(duration)&&duration>0&&duration<=15?duration:null;

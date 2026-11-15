@@ -237,6 +237,66 @@ class HomeProcessAdmissionTests(unittest.TestCase):
     def test_renewal_loss_during_encode_retains_permit_until_process_dead(self):
         self._renewal_loss('encode')
 
+    def _native_suppressed_release(self, external=False, concurrent=False):
+        async def run():
+            events=[];started=asyncio.Event();release_started=asyncio.Event()
+            class Executor:
+                async def _acquire_process_slot(self,*args,**kwargs):return 'lease'
+                @classmethod
+                async def _release_global_process_slot(cls,token):events.append('physical-release')
+                async def execute(self):
+                    token=await self._acquire_process_slot(['ffmpeg'])
+                    try:
+                        started.set();await asyncio.Event().wait()
+                    except asyncio.CancelledError:
+                        await asyncio.sleep(.001);events.append('process-dead');raise
+                    finally:
+                        # Native FFlow deliberately logs/suppresses release errors.
+                        try:await self._release_global_process_slot(token)
+                        except Exception:events.append('release-error-suppressed')
+            async def acquire(scope):return 'permit'
+            async def release(identifier):
+                events.append('permit-release');release_started.set();await asyncio.sleep(.005)
+            async def renew(identifier):
+                await started.wait()
+                if external:await asyncio.Event().wait()
+                raise OSError('fixture renewal lost')
+            with patch.object(self.home,'_renew',renew):
+                self.home.install_executor(Executor,acquire=acquire,release=release)
+                scope=self.home.HOME_SCOPE.set({'jobId':'job','nonce':'nonce'})
+                state=self.home.WORK_STATE.set({})
+                owner=asyncio.create_task(Executor().execute())
+                try:
+                    await started.wait()
+                    if external:owner.cancel('external shutdown')
+                    if concurrent:
+                        await release_started.wait();owner.cancel('external shutdown')
+                    if external or concurrent:
+                        with self.assertRaises(asyncio.CancelledError):await owner
+                    else:
+                        try:await owner
+                        except asyncio.CancelledError:
+                            self.fail('Native release suppression escaped as worker shutdown')
+                        except self.home.HomeFallbackAdmissionError:pass
+                        else:self.fail('Renewal loss was accepted as success')
+                    self.assertLess(events.index('process-dead'),events.index('physical-release'))
+                    self.assertEqual(events.count('physical-release'),1)
+                    self.assertEqual(events.count('permit-release'),1)
+                    self.assertEqual([t for t in asyncio.all_tasks() if t is not asyncio.current_task()],[])
+                finally:
+                    if not owner.done():owner.cancel();await asyncio.gather(owner,return_exceptions=True)
+                    self.home.WORK_STATE.reset(state);self.home.HOME_SCOPE.reset(scope)
+        asyncio.run(run())
+
+    def test_native_suppressed_release_still_reports_renewal_loss_not_worker_shutdown(self):
+        self._native_suppressed_release()
+
+    def test_native_suppressed_release_preserves_external_shutdown(self):
+        self._native_suppressed_release(external=True)
+
+    def test_native_suppressed_release_preserves_concurrent_external_shutdown(self):
+        self._native_suppressed_release(concurrent=True)
+
     def test_transient_json_renewal_retries_but_requires_active(self):
         async def run():
             with patch.object(self.home,'_request',side_effect=[

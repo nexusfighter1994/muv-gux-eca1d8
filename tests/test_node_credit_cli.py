@@ -31,6 +31,15 @@ class CreditTests(unittest.TestCase):
         self.assertEqual(actual['argv'],before['argv']);self.assertEqual(actual['duration'],3.0)
         self.assertEqual(self.text.read_text(),'Quelle: Test')
 
+    def test_explicit_mp4_muxer_credit_forms_qualify_as_canonical(self):
+        only="drawtext=textfile='"+self.text_filter_path+"':fontcolor=white@0.6:fontsize=24:x=12:y=12"
+        for flt in (self.filter, only):
+            req=copy.deepcopy(self.request);req['argv'][4]=flt
+            canonical=copy.deepcopy(req['argv'])
+            req['argv'][25:25]=['-f','mp4']
+            with self.subTest(filter=flt[:20]):
+                self.assertEqual(cli.qualify(req)['argv'],canonical)
+
     def test_other_text_files_and_injected_filters_are_rejected(self):
         other=self.root/'unrelated.txt';other.write_text('not this operation')
         for bad in [self.filter.replace(self.text_filter_path,other.as_posix().replace(':','\\:')),

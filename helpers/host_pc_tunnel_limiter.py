@@ -17,11 +17,11 @@ import urllib.request
 import uuid
 from dataclasses import dataclass
 
-VF_IP = '10.0.3.21'
+VF_IP = '10.0.3.16'
 GATEWAY = '10.0.3.1'
 PORTS = (18191, 18194)
 DEFAULT_RATES = {'downMbit': 120, 'upMbit': 37}
-API_ORIGIN = 'http://10.0.3.21:8000'
+API_ORIGIN = f'http://{VF_IP}:8000'
 TOKEN_FILE = '/var/lib/docker/volumes/aufsetzen-apps_vidforge-data/_data/runtime/pc-boost-token'
 STATE_FILE = '/var/lib/vf-pc-tunnel-limiter/state.json'
 LOCK_FILE = '/run/vf-pc-tunnel-limiter/reconciler.lock'

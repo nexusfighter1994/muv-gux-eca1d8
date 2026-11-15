@@ -20,9 +20,11 @@ function createRecovery({getContext,validScope,isAborted,cancel,report=()=>{}}) 
       return async function(options={}){
         if(options.engine!=='fflow')return original.apply(this,arguments);
         let last;
-        const deadline=Number.isFinite(options.timeoutMs)?Date.now()+options.timeoutMs:Infinity;
+        const budget=require('./home-chunk-budget.cjs').createBudget(options,{chunk:chunkContext.getStore(),
+          scope:getContext()?.leases?.get('ffmpeg')?.boosted,validScope,report});
+        const deadline=Number.isFinite(budget.options.timeoutMs)?Date.now()+budget.options.timeoutMs:Infinity;
         try {
-          return await pollContext.run({deadline},()=>original.call(this,{...options,
+          return await pollContext.run({deadline},()=>original.call(this,{...budget.options,
             fetchStatus:async()=>{last=await options.fetchStatus();return last;}}));
         } catch(error) {
           const data=last?.data||last;
@@ -38,7 +40,7 @@ function createRecovery({getContext,validScope,isAborted,cancel,report=()=>{}}) 
             catch {stats.cleanupFailed++;report('FFlow poll cleanup request failed',options.remoteJobId);}
           }
           throw error;
-        }
+        } finally {budget.finish(last);}
       };
     },
     wrapChunk(original){

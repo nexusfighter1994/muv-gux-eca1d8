@@ -50,7 +50,7 @@ class PcBoostSettings extends HTMLElement {
                 <label>CPU workers<input class="vc-input" name="cpuWorkers" type="number" min="0" max="25" step="1" required></label>
                 <label>GPU encoding workers<input class="vc-input" name="gpuWorkers" type="number" min="0" max="25" step="1" required></label>
                 <label>SigLIP concurrency<input class="vc-input" name="siglipConcurrency" type="number" min="1" max="25" step="1" required></label>
-                <label>Server SigLIP while PC ready<input class="vc-input" name="siglipServerEmbeds" type="number" min="0" max="25" step="1" required></label>
+                <label>Server SigLIP total while PC ready<input class="vc-input" name="siglipServerEmbeds" type="number" min="0" max="25" step="1" required></label>
                 <label>Scene workers<input class="vc-input" name="sceneWorkers" type="number" min="0" max="25" step="1" required></label>
               </div>
               <details class="vf-pc-boost__explain" open><summary>What these settings do</summary><dl><dt>PC Boost enabled</dt><dd>Master switch. On: while the home PC is reachable the server hands it FFmpeg jobs, motion graphics, B-roll ranking (SigLIP) and scene detection; whatever the PC cannot take runs on the server as before. Off: everything runs on the server.</dd><dt>SigLIP GPU enabled</dt><dd>B-roll ranking (scores candidate pictures and clips against the script) on the PC graphics card instead of the server CPU. While it is ready the server ranks at most one request itself; OCR always stays on the server.</dd><dt>CPU workers</dt><dd>CPU jobs the PC runs at once: FFmpeg x264 jobs and motion graphics (each running graphic takes one). Rule of thumb: CPU threads minus 4 to 6 (24 threads: 18). Higher = more in parallel, but each job slower and the PC less responsive.</dd><dt>GPU encoding workers</dt><dd>FFmpeg jobs encoded on the graphics card at once (NVENC, QP 14 = visually lossless). Maps take one slot too. Recommended 4 to 6; consumer NVIDIA cards allow only a few encodes at the same time.</dd><dt>SigLIP concurrency</dt><dd>Ranking requests the PC accepts at once. The GPU works through them in batches while the CPU prepares the next pictures. 10 to 20 keeps the GPU busy; more only makes requests wait longer (one that waits over 75 s goes back to the server).</dd><dt>Server SigLIP while PC ready</dt><dd>Rankings the server CPU still does itself while the PC SigLIP is ready (the rest waits for the PC). 1 = server stays free for its other work; 2 to 4 empties the backlog faster but takes CPU from the already busy server. 0 = everything on the PC. When the PC is off the server uses its normal limit. OCR always runs on the server.</dd><dt>Scene workers</dt><dd>Scene-cut detections the PC runs at once (CPU). 0 = off, the server does them.</dd></dl></details>
@@ -403,7 +403,7 @@ function mountConcurrency() {
     const anchor = [...list.querySelectorAll('.vc-worker-row')].find(row => /FFmpeg/i.test(row.querySelector('strong')?.textContent || ''));
     if (!anchor) continue;
     let previous = anchor;
-    for (const [key, label] of [['queue','Home PC queue'],['cpu', 'Home PC FFmpeg CPU'], ['gpu', 'Home PC FFmpeg GPU'], ['motion','Home PC Motion queue (CPU)'], ['graphics', 'Home PC graphics pool'], ['scene', 'Home PC Scenes'], ['siglip', 'Home PC SigLIP GPU']]) {
+    for (const [key, label] of [['queue','Home PC queue'],['cpu', 'Home PC FFmpeg CPU'], ['gpu', 'Home PC FFmpeg GPU'], ['motion','Home PC Motion queue (CPU)'], ['motionValidation','Home PC Motion validation (CPU)'], ['graphics', 'Home PC graphics pool'], ['scene', 'Home PC Scenes'], ['siglip', 'Home PC SigLIP GPU'], ['ocr', 'Home PC OCR (CPU)']]) {
       const row = document.createElement('li');
       row.className = 'vc-worker-row vf-homepc-row';
       row.dataset.homepcRow = key;
@@ -427,6 +427,22 @@ function renderConcurrency(data) {
   const number = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : '?';
   for (const row of document.querySelectorAll('[data-homepc-row]')) {
     const key = row.dataset.homepcRow;
+    if(key==='motionValidation'){
+      const check=data?.homeMotionValidation;
+      row.querySelector('.vc-faint').textContent=check
+        ?`${check.ready?'Reachable':'Unavailable; server normal'} | ${number(check.active)}/${number(check.capacity)} busy | ${number(check.completed)} checked | ${number(check.rejected)} quality rejections | ${number(check.fallback)} server recoveries`
+        :'Validation status unavailable; server normal';
+      row.classList.toggle('vc-worker-row--busy',Number(check?.active)>0);
+      continue;
+    }
+    if(key==='ocr'){
+      const ocr=data?.homeOcr;
+      row.querySelector('.vc-faint').textContent=ocr
+        ?`${ocr.ready?'Reachable':'Unavailable; server normal'} | ${number(ocr.active)}/${number(ocr.capacity)} busy | ${number(ocr.completed)} completed / ${number(ocr.images)} images (since activation) | ${number(ocr.queued)} queued candidates | ${number(ocr.fallback)} server recoveries`
+        :'OCR status unavailable; server normal';
+      row.classList.toggle('vc-worker-row--busy',Number(ocr?.active)>0);
+      continue;
+    }
     if(key==='motion'){
       row.querySelector('.vc-faint').textContent=homeMotionSummary(data);
       row.classList.toggle('vc-worker-row--busy',Number(data?.homeMotionQueue?.homeActive)>0);
@@ -480,11 +496,13 @@ function renderConcurrency(data) {
     parts.push(Number.isSafeInteger(completed) ? `${completed} completed (PC total)` : 'Completed unavailable');
     if (key === 'siglip' && data?.homeSiglipQueue) {
       const queue = data.homeSiglipQueue;
-      parts.push(`${number(queue.active)}/${number(queue.capacity)} admitted`,
-        `${number(queue.queued)} eligible queued`, `${number(queue.recovering)} native recoveries`);
+      parts.push(`${number(queue.homeActive ?? Math.max(0,queue.active-queue.recovering))}/${number(queue.capacity)} Home admitted`,
+        `${number(Math.max(0,queue.queued-(data?.homeOcr?.queued||0)))} embedding queued`, `${number(queue.recovering)} native recoveries`);
     }
-    // While the PC is ready the server runs at most one embedding itself; the rest waits for the PC.
-    if (key === 'siglip' && data?.siglipServer) {
+    if (key === 'siglip' && data?.homeSiglipQueue?.server) {
+      const server = data.homeSiglipQueue.server;
+      parts.push(`server ${number(server.active)}/${number(server.max)} total${server.homeConnected ? '' : ' (PC offline)'}`);
+    } else if (key === 'siglip' && data?.siglipServer) {
       parts.push(`server ${number(data.siglipServer.embeds)}/${number(data.siglipServer.max)} embeddings`, `${number(data.siglipServer.waitingForPc)} waiting for PC`);
     }
     row.querySelector('.vc-faint').textContent = parts.join(' | ');

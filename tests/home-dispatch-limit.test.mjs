@@ -57,3 +57,15 @@ test('hot shim and cold admission use the same capacity function', () => {
   const source=fs.readFileSync(new URL('../node/home-queue.mjs',import.meta.url),'utf8');
   assert.match(source,/homeDispatch\.dispatchCapacity\(health,homeDispatch\.readLimit\(\)\)/);
 });
+
+test('scopes parked in server recovery add bounded dispatch slots', () => {
+  const health={ready:true,capacity:32,checkedAt:Date.now()};
+  const items=new Map([[1,{controller:new AbortController()}],[2,{controller:new AbortController()}]]);
+  const aborted=new AbortController();aborted.abort();items.set(3,{controller:aborted});
+  assert.equal(mod.recoveryPending(items),2);
+  assert.equal(mod.dispatchCapacity(health,40,Date.now(),mod.recoveryPending(items)),42);
+  const many=new Map(Array.from({length:40},(_,i)=>[i,{controller:new AbortController()}]));
+  assert.equal(mod.recoveryPending(many),mod.MAX_RECOVERY_EXTRA);
+  assert.equal(mod.recoveryPending(undefined),0);
+  assert.equal(mod.dispatchCapacity({...health,ready:false},40,Date.now(),5),0);
+});

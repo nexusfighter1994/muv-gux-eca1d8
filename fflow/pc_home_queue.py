@@ -2,6 +2,7 @@
 import asyncio
 from contextvars import ContextVar
 from functools import wraps
+import http.client
 import json
 import logging
 import os
@@ -26,6 +27,7 @@ _NAME=re.compile(r'^vfhome-('+_UUID+r')-('+_UUID+r')\.mp4$')
 _HTTP_RETRY_BUDGET=40
 _HTTP_RETRY_DELAY=2
 _ADMISSION_DEADLINE=900
+FALLBACK_HTTP_PROTOCOL_VERSION=2
 
 
 def scope_from_composition(composition):
@@ -148,7 +150,7 @@ async def _request_retry(method,suffix='',body=None,retry_budget=None,retry_dela
         except urllib.error.HTTPError as error:
             if error.code not in (408,429) and not 500<=error.code<=599:
                 raise
-        except (OSError,ValueError,TimeoutError):
+        except (OSError,ValueError,TimeoutError,http.client.BadStatusLine,http.client.IncompleteRead):
             pass
         else:
             return value
@@ -172,6 +174,18 @@ async def _renew(identifier):
         await _renew_active(identifier)
 
 
+async def _release_owned(release, identifier):
+    cleanup=asyncio.create_task(release(identifier))
+    cancelled=None
+    while not cleanup.done():
+        try:await asyncio.shield(cleanup)
+        except asyncio.CancelledError as error:cancelled=error
+    if cancelled is not None:
+        if not cleanup.cancelled():cleanup.exception()
+        raise cancelled
+    return cleanup.result()
+
+
 def install_executor(cls,acquire=acquire_permit,release=release_permit):
     if getattr(cls,'_vf_home_installed',False):return
     original_acquire=cls._acquire_process_slot
@@ -187,6 +201,9 @@ def install_executor(cls,acquire=acquire_permit,release=release_permit):
                 owner=state['owner']
                 if not owner.done() and not owner.cancelling():
                     state['cancelled_owner']=owner.cancel('Native Home fallback renewal lost')
+                    work=WORK_STATE.get()
+                    if state['cancelled_owner'] and work is not None:
+                        work['fallbackCancellation']=state
     async def stop_watch(state):
         state['closing']=True
         state['renew'].cancel()
@@ -194,6 +211,14 @@ def install_executor(cls,acquire=acquire_permit,release=release_permit):
     def fail_owner(state):
         if state['cancelled_owner']:
             state['owner'].uncancel()
+            state['cancellationConsumed']=True
+            raise HomeFallbackAdmissionError('Native Home fallback renewal lost') from None
+    def fail_after_cleanup():
+        work=WORK_STATE.get()
+        state=work.get('fallbackCancellation') if work is not None else None
+        owner=asyncio.current_task()
+        if state and state['owner'] is owner and state.get('cancellationConsumed') and not owner.cancelling():
+            work.pop('fallbackCancellation',None)
             raise HomeFallbackAdmissionError('Native Home fallback renewal lost') from None
     async def take(self,cmd,acquire_timeout=None,kind='ffmpeg'):
         scope=HOME_SCOPE.get()
@@ -215,7 +240,7 @@ def install_executor(cls,acquire=acquire_permit,release=release_permit):
             result=(await asyncio.gather(physical,return_exceptions=True))[0]
             try:
                 if not isinstance(result,BaseException):await original_release(result)
-            finally:await asyncio.shield(release(identifier))
+            finally:await _release_owned(release,identifier)
             fail_owner(state)
             raise
         if kind=='ffmpeg' and WORK_STATE.get() is not None:
@@ -228,8 +253,21 @@ def install_executor(cls,acquire=acquire_permit,release=release_permit):
         try:await original_release(token)
         finally:
             if item:
-                await asyncio.shield(release(item[0]))
+                await _release_owned(release,item[0])
         if item:fail_owner(item[1])
+    original_execute=getattr(cls,'execute',None)
+    if callable(original_execute):
+        @wraps(original_execute)
+        async def execute(self,*args,**kwargs):
+            try:result=await original_execute(self,*args,**kwargs)
+            except asyncio.CancelledError:
+                # Native release logging suppresses our error; convert only our
+                # consumed cancellation, after its process and permits are closed.
+                fail_after_cleanup()
+                raise
+            fail_after_cleanup()
+            return result
+        cls.execute=execute
     cls._acquire_process_slot=take
     cls._release_global_process_slot=classmethod(give)
     cls._vf_home_installed=True

@@ -20,7 +20,9 @@ const homeUnready = () => {
   return caps?.ready === false && Number.isFinite(caps.checkedAt) && Date.now() - caps.checkedAt < 30000;
 };
 const MAIN = /<[a-zA-Z][^>]*\bdata-composition-id\s*=\s*(["'])main\1[^>]*>/g;
-const ALPHA_HEADER = /^<!doctype html>\s*<html>\s*<head>\s*<meta charset="utf-8">\s*<style>[^<]*<\/style>\s*<\/head>\s*<body>\s*<div id="root" data-composition-id="main" data-start="0" data-duration="([0-9]+(?:\.[0-9]+)?)" data-width="1920" data-height="1080">/;
+// Localized jobs render <html lang="ko"> and a second <style>body *{unicode-bidi:plaintext}</style>;
+// opaqueDuration never required either (2026-11-05). The HTML itself is passed to Home unchanged.
+const ALPHA_HEADER = /^<!doctype html>\s*<html(?: lang="[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?")?>\s*<head>\s*<meta charset="utf-8">\s*(?:<style>[^<]*<\/style>\s*)+<\/head>\s*<body>\s*<div id="root" data-composition-id="main" data-start="0" data-duration="([0-9]+(?:\.[0-9]+)?)" data-width="1920" data-height="1080">/;
 
 function opaqueDuration(html) {
   if (typeof html !== 'string' || html.length > 2 * 1024 * 1024) return null;
@@ -164,6 +166,8 @@ function createFrameshiftRoute({ RU, getStore, mF, jp, getJobs, Xl, isJobAborted
   if (!jp || typeof jp.get !== 'function') throw new TypeError('jp must be a Map');
   const stats = { calls: 0, bypassed: 0, alpha: { tried: 0, home: 0, native: 0 }, opaque: { tried: 0, home: 0, native: 0 }, pod: { tried: 0, home: 0, native: 0 },
     errors: 0, active: 0, reasons: {}, samples: [], last: null };
+  // Whole-route active includes native fallbacks after their Home target was released.
+  Object.defineProperty(stats, 'homeInFlight', { enumerable: true, get: () => inflight });
   const reject = (reason, options) => {
     stats.reasons[reason] = (stats.reasons[reason] || 0) + 1;
     if (!NO_MISS.has(reason)) miss();

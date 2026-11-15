@@ -6,6 +6,16 @@ import { createRequire } from 'node:module';
 const require = createRequire('C:/Users/user/Documents/Codex/2026-07-04/du-bist-codex-auf-users-windows/signalforge-recovered/package.json');
 const { JSDOM } = require('jsdom');
 const source = fs.readFileSync(new URL('../ui/pc-boost-settings-20261002.js', import.meta.url), 'utf8');
+test('Home OCR has separate CPU counters and does not inflate queued GPU embeddings',()=>{
+  const {dom}=fixture();
+  try{
+    dom.window.document.body.insertAdjacentHTML('beforeend','<div data-homepc-row="ocr"><strong></strong><span class="vc-faint"></span></div>');
+    dom.window.eval('renderConcurrency('+JSON.stringify({homeOcr:{ready:true,active:2,capacity:2,completed:11,images:57,queued:2600,fallback:0}})+')');
+    const row=dom.window.document.querySelector('[data-homepc-row="ocr"]');
+    assert.match(row.textContent,/2\/2 busy/);assert.match(row.textContent,/57 images/);assert.match(row.textContent,/11 completed/);
+    assert.doesNotMatch(row.textContent,/GPU/);
+  }finally{dom.window.close();}
+});
 test('native Home scenes show separate CPU/GPU completions without claiming old WSL slots',()=>{
   const {dom}=fixture();
   try{

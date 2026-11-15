@@ -175,6 +175,28 @@ def fflow():
         write(target, text, crlf)
     note('fflow.slotCleanup', True)
 
+    # FX transition encoder exit wait under CPU load (fx-encode-wait-install.py).
+    runner = CORE / 'fxtransitions' / 'runner.py'
+    try:
+        text, crlf = read(runner)
+        patched = runpy.run_path(str(HERE / 'fx-encode-wait-install.py'))['patch_runner'](text)
+        if patched != text:
+            write(runner, patched, crlf)
+        note('fflow.fxEncodeWait', True)
+    except Exception as error:
+        note('fflow.fxEncodeWait', False, str(error))
+
+    # FX transition job budget under CPU load (fx-budget-install.py).
+    service = CORE / 'fxtransitions' / 'service.py'
+    try:
+        text, crlf = read(service)
+        patched = runpy.run_path(str(HERE / 'fx-budget-install.py'))['patch_service'](text)
+        if patched != text:
+            write(service, patched, crlf)
+        note('fflow.fxBudget', True)
+    except Exception as error:
+        note('fflow.fxBudget', False, str(error))
+
     # Timeouts grow with the media length (ffmpeg_duration_timeout.py).
     text, crlf = read(target)
     timeout_marker = '# vf-custom:ffmpeg-duration-timeout-v1'
@@ -473,7 +495,45 @@ def node():
     previous = None
     if MARK + ':hooks' in text:
         previous = HOOK_GATE['parse_hook_report']((target / 'hooks-build.json').read_bytes())
-        HOOK_GATE['validate_hook_report'](previous)
+        # Validate all prior required hooks before adding a newly introduced hook.
+        prior_contract = previous
+        if '/* vf-custom:render-prerequisite-v1 */' not in text and 'node.renderPrerequisite' not in previous['report']:
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.renderPrerequisite': 'ok'}}
+        if '/* vf-custom:openai-images-v1 */' not in text and 'node.openaiImages' not in previous['report']:
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.openaiImages': 'ok', 'ui.openaiImages': 'ok'}}
+        if '/* vf-custom:cgroup-pressure-accounting-v1 */' not in text and 'node.cgroupPressureAccounting' not in previous['report']:
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.cgroupPressureAccounting': 'ok'}}
+        if '/* vf-custom:thumbnail-result-guard-v1 */' not in text and 'node.thumbnailResultGuard' not in previous['report']:
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.thumbnailResultGuard': 'ok'}}
+        if '/* vf-custom:voice-ja-ko-gate-v1 */' not in text and 'node.voiceJaKoCompatibility' not in previous['report']:
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.voiceJaKoCompatibility': 'ok'}}
+        if '/* vf-custom:source-text-alignment-v1 */' not in text and 'node.sourceTextAlignment' not in previous['report']:
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.sourceTextAlignment': 'ok'}}
+        if 'node.visionDeepseek' not in previous['report']:
+            runpy.run_path(str(HERE / 'vision-deepseek-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.visionDeepseek': 'ok'}}
+        if 'node.surplusVisionBudget' not in previous['report']:
+            runpy.run_path(str(HERE / 'surplus-vision-budget-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.surplusVisionBudget': 'ok'}}
+        if 'node.realHeadroomGate' not in previous['report']:
+            runpy.run_path(str(HERE / 'real-headroom-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.realHeadroomGate': 'ok'}}
+        if 'node.surplusModelKeys' not in previous['report']:
+            runpy.run_path(str(HERE / 'surplus-model-keys-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.surplusModelKeys': 'ok'}}
+        if 'node.sfxCloseOnce' not in previous['report']:
+            runpy.run_path(str(HERE / 'sfx-close-once-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.sfxCloseOnce': 'ok'}}
+        if 'node.ffmpegDefaultTimeout' not in previous['report']:
+            runpy.run_path(str(HERE / 'ffmpeg-default-timeout-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.ffmpegDefaultTimeout': 'ok'}}
+        if 'fflow.fxEncodeWait' not in previous['report']:
+            # Python-side hook added 2026-11-09; fflow() installs it, older reports predate it.
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'fflow.fxEncodeWait': 'ok'}}
+        if 'fflow.fxBudget' not in previous['report']:
+            # Python-side hook added 2026-11-10; fflow() installs it, older reports predate it.
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'fflow.fxBudget': 'ok'}}
+        HOOK_GATE['validate_hook_report'](prior_contract)
     if target.exists():
         shutil.rmtree(target)
     shutil.copytree(HERE / 'node', target)
@@ -499,8 +559,32 @@ def node():
         text = runpy.run_path(str(HERE / 'home-camera-install.py'))['patch_node'](text)
         text = runpy.run_path(str(HERE / 'home-scenes-install.py'))['patch_node'](text)
         text = runpy.run_path(str(HERE / 'chunk-poll-install.py'))['patch_node'](text)
+        text = runpy.run_path(str(HERE / 'cgroup-pressure-install.py'))['patch_node'](text)
+        text = runpy.run_path(str(HERE / 'thumbnail-result-install.py'))['patch_node'](text)
+        note('node.thumbnailResultGuard', True)
+        text = runpy.run_path(str(HERE / 'voice-language-install.py'))['patch_node'](text)
+        note('node.voiceJaKoCompatibility', True)
+        text = runpy.run_path(str(HERE / 'source-text-alignment-install.py'))['patch_node'](text)
+        note('node.sourceTextAlignment', True)
+        note('node.cgroupPressureAccounting', True)
         note('node.chunkPollRecovery', True)
         note('node.homeQueue', True)
+        text = runpy.run_path(str(HERE / 'openai-images-install.py'))['patch_node'](text)
+        note('node.openaiImages', True)
+        text = runpy.run_path(str(HERE / 'render-prerequisite-install.py'))['patch_node'](text)
+        note('node.renderPrerequisite', True)
+        text = runpy.run_path(str(HERE / 'vision-deepseek-install.py'))['patch_node'](text)
+        note('node.visionDeepseek', True)
+        text = runpy.run_path(str(HERE / 'surplus-vision-budget-install.py'))['patch_node'](text)
+        note('node.surplusVisionBudget', True)
+        text = runpy.run_path(str(HERE / 'real-headroom-install.py'))['patch_node'](text)
+        note('node.realHeadroomGate', True)
+        text = runpy.run_path(str(HERE / 'surplus-model-keys-install.py'))['patch_node'](text)
+        note('node.surplusModelKeys', True)
+        text = runpy.run_path(str(HERE / 'sfx-close-once-install.py'))['patch_node'](text)
+        note('node.sfxCloseOnce', True)
+        text = runpy.run_path(str(HERE / 'ffmpeg-default-timeout-install.py'))['patch_node'](text)
+        note('node.ffmpegDefaultTimeout', True)
         write(bundle, text, crlf)
         note('node.bundle', True, 'already patched')
         (target / 'hooks-build.json').write_text(json.dumps({
@@ -680,6 +764,16 @@ def node():
     tail.append('})();\n')
     text = long_assembly(_home_install.patch_node(gpu_render_events(ffmpeg_admission(ai33_stt_response(map_admission(stream_compat(fish_free(thumbnail_identity(thumbnail_openlux(sourcing_deadline(text + ''.join(tail))))))))))))
     text = runpy.run_path(str(HERE / 'chunk-poll-install.py'))['patch_node'](text)
+    text = runpy.run_path(str(HERE / 'cgroup-pressure-install.py'))['patch_node'](text)
+    text = runpy.run_path(str(HERE / 'thumbnail-result-install.py'))['patch_node'](text)
+    note('node.thumbnailResultGuard', True)
+    text = runpy.run_path(str(HERE / 'voice-language-install.py'))['patch_node'](text)
+    note('node.voiceJaKoCompatibility', True)
+    text = runpy.run_path(str(HERE / 'source-text-alignment-install.py'))['patch_node'](text)
+    note('node.sourceTextAlignment', True)
+    text = runpy.run_path(str(HERE / 'surplus-market-retry-install.py'))['patch_node'](text)
+    note('node.surplusMarketplaceRetry', True)
+    note('node.cgroupPressureAccounting', True)
     note('node.chunkPollRecovery', True)
     note('node.homeQueue', True)
     text = _memory_install.patch_node(text)
@@ -697,6 +791,22 @@ def node():
     text = _media_install.patch_node(text)
     text = runpy.run_path(str(HERE / 'home-camera-install.py'))['patch_node'](text)
     text = runpy.run_path(str(HERE / 'home-scenes-install.py'))['patch_node'](text)
+    text = runpy.run_path(str(HERE / 'openai-images-install.py'))['patch_node'](text)
+    note('node.openaiImages', True)
+    text = runpy.run_path(str(HERE / 'render-prerequisite-install.py'))['patch_node'](text)
+    note('node.renderPrerequisite', True)
+    text = runpy.run_path(str(HERE / 'vision-deepseek-install.py'))['patch_node'](text)
+    note('node.visionDeepseek', True)
+    text = runpy.run_path(str(HERE / 'surplus-vision-budget-install.py'))['patch_node'](text)
+    note('node.surplusVisionBudget', True)
+    text = runpy.run_path(str(HERE / 'real-headroom-install.py'))['patch_node'](text)
+    note('node.realHeadroomGate', True)
+    text = runpy.run_path(str(HERE / 'surplus-model-keys-install.py'))['patch_node'](text)
+    note('node.surplusModelKeys', True)
+    text = runpy.run_path(str(HERE / 'sfx-close-once-install.py'))['patch_node'](text)
+    note('node.sfxCloseOnce', True)
+    text = runpy.run_path(str(HERE / 'ffmpeg-default-timeout-install.py'))['patch_node'](text)
+    note('node.ffmpegDefaultTimeout', True)
     write(bundle, text, crlf)
     (target / 'hooks-build.json').write_text(json.dumps({'fingerprints': {**found, 'app': app, 'owner': owner, 'db': db}, 'report': report}, indent=1))
 
@@ -720,6 +830,17 @@ def gpu_render_events(text):
 
 def ui():
     assets = PUBLIC / 'assets'
+    html, _ = read(PUBLIC / 'index.html')
+    scripts = re.findall(r'<script\b[^>]*\bsrc="(/assets/index-[^"?]+\.js)(?:\?[^\"]*)?"', html)
+    if len(scripts) != 1:
+        raise RuntimeError('OpenAI Images native UI entry is not unique')
+    main = PUBLIC / scripts[0].lstrip('/')
+    source, main_crlf = read(main)
+    source = runpy.run_path(str(HERE / 'openai-images-install.py'))['patch_ui'](source)
+    write(main, source, main_crlf)
+    html = re.sub(r'(' + re.escape(scripts[0]) + r')(?:\?[^\"]*)?"', r'\1?v=openai-images-20261103"', html)
+    write(PUBLIC / 'index.html', html, False)
+    note('ui.openaiImages', True)
     for f in (HERE / 'ui').iterdir():
         shutil.copy2(f, assets / f.name)
     index = PUBLIC / 'index.html'
@@ -758,6 +879,7 @@ if __name__ == '__main__':
     graphics()
     geomap_isolation()
     fflow()
+    report.update(runpy.run_path(str(HERE / 'python-memory-install.py'))['install']())
     node()
     ui()
     subprocess.run(['node', str(HERE / 'eta-display' / 'installer.cjs'), str(DIST / 'index.mjs')], check=True)

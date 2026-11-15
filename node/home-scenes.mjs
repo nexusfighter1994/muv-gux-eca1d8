@@ -1,4 +1,9 @@
+import previewStore from './scene-preview-store.cjs';
 export const SCENE_CALLBACK_HASH='d834cb268ba773c4d95127d154bddb3f6bdcc9db776f044fffedc9bcb0781be2';
+// Home gets the native analysis budget minus a reserve for the native fallback (server scenes
+// p95 36 s, max 85 s under full load, 2026-11-05). The former fixed 90 s cap timed out 5 of 8
+// Home attempts in the render phase, so their detection ran again on the saturated server.
+export const HOME_SCENE_MAX_MS=360000,NATIVE_SCENE_RESERVE_MS=120000;
 export function wrapHomeScenes(original,d){
   return async function(r){
     const lease=d.getContext()?.leases?.get('ffmpeg'),scope=lease?.boosted;
@@ -7,7 +12,7 @@ export function wrapHomeScenes(original,d){
     const check=()=>{if(signal?.aborted)throw signal.reason||Error('Cancelled');
       if(!d.validScope(scope))throw Error('Scene scope expired');};
     check();
-    const budgetMs=Math.min(90000,Number(r.deadlineTs)-Date.now()-60000);
+    const budgetMs=Math.min(HOME_SCENE_MAX_MS,Number(r.deadlineTs)-Date.now()-NATIVE_SCENE_RESERVE_MS);
     if(d.enabled()&&budgetMs>=15000){
       scope.candidate=false;d.stats.attempted++;
       try{
@@ -15,7 +20,7 @@ export function wrapHomeScenes(original,d){
         check();
         if(result?.offloaded&&result.verified&&Array.isArray(result.shots)&&result.shots.length){
           if(!/^[a-zA-Z0-9_-]+$/.test(result.projectSlug||''))throw Error('Project scope');
-          const publish=r.publishFile||await d.getPublisher();
+          const publish=d.publishPreview||previewStore.createPublisher();
           const shots=result.shots.map(s=>{const {thumbnailPath,...shot}=s;
             if(typeof thumbnailPath!=='string'||thumbnailPath.includes('/../')||!thumbnailPath.startsWith('/data/projects/'+result.projectSlug+'/home-scene-previews/'+scope.jobId+'/'))throw Error('Preview scope');
             let inline={};
@@ -24,7 +29,7 @@ export function wrapHomeScenes(original,d){
               if(fs.statSync(thumbnailPath).size>2*1024*1024)throw Error('Scene preview size');
               inline={thumbnail_data_url:'data:image/jpeg;base64,'+fs.readFileSync(thumbnailPath).toString('base64')};
             }
-            return {...shot,thumbnail_url:publish(thumbnailPath,'scene-'+process.getBuiltinModule('crypto').randomUUID()+'.jpg'),...inline};});
+            return {...shot,thumbnail_url:publish(thumbnailPath,scope.jobId),...inline};});
           d.stats[result.backend==='NVDEC + CPU scenes'?'gpu':'cpu']++;
           try{d.record(scope,result.backend);}catch{}
           return {shots,videoFps:result.videoFps};

@@ -33,8 +33,12 @@ export function markPendingHomeCandidates(state,limit=Infinity){
   return marked;
 }
 
+const DIRECT_INSTALLED=Symbol.for('vidforge.home-direct.installed');
 export function installHomeDirect({scheduler,getSlotMeasurer,setSlotMeasurer,getContext,runRecovery,runNativeContext}){
-  if(scheduler.run.__vfHomeDirect)return;
+  if(scheduler[DIRECT_INSTALLED])return;
+  if(scheduler.run.__vfHomeDirect){
+    Object.defineProperty(scheduler,DIRECT_INSTALLED,{value:true,configurable:true});return;
+  }
   if(typeof runNativeContext!=='function')throw new TypeError('runNativeContext is required');
   const originalSampler=getSlotMeasurer();
   setSlotMeasurer(function(request){
@@ -59,4 +63,6 @@ export function installHomeDirect({scheduler,getSlotMeasurer,setSlotMeasurer,get
   };
   run.__vfHomeDirect=true;
   scheduler.run=run;
+  // Other optional wrappers can replace run and lose its function properties.
+  Object.defineProperty(scheduler,DIRECT_INSTALLED,{value:true,configurable:true});
 }

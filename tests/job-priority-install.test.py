@@ -50,6 +50,12 @@ class Installation(unittest.TestCase):
             with self.subTest(old=old), self.assertRaisesRegex(RuntimeError, 'fingerprint'):
                 self.patch(NATIVE.replace(old, new))
 
+    def test_serial_map_queue_receives_same_job_priorities(self):
+        native=NATIVE+'\nfunction pumpMaps(){if(activeMap||waitingMaps.length===0)return;}\n'
+        patched=self.patch(native)
+        self.assertIn('installMapQueuePriority({getQueue:()=>waitingMaps,getJobs:()=>jp})',patched)
+        self.assertEqual(self.patch(patched),patched)
+
     def test_optional_exact_stock(self):
         if not os.environ.get('VF_STOCK_BUNDLE'):
             self.skipTest('VF_STOCK_BUNDLE not set')

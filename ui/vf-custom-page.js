@@ -3,7 +3,7 @@
   const FIELDS = [
     { key: 'maxActiveVideos', mod: 'queueLimit', group: 'production', label: 'Gleichzeitige Videos', min: 1, max: 200, hint: 'Begrenzt neue Starts; laufende Videos werden nicht abgebrochen.' },
     { key: 'autoRetryFailed', mod: 'autoRetry', group: 'production', label: 'Wiederholungen pro fehlgeschlagenem Video', min: 0, max: 10, hint: '0 deaktiviert automatische Wiederholungen. Gespeicherte Arbeit bleibt erhalten.' },
-    { key: 'surplusFirst', mod: 'surplusRouting', group: 'providers', label: 'Surplus auf geeigneten Routen bevorzugen', type: 'boolean', hint: 'Native Vorgaben, festgelegte Modelle und ausgeschlossene Scorer bleiben erhalten.' },
+    { key: 'surplusFirst', mod: 'surplusRouting', group: 'providers', label: 'Surplus-Fallbacks ergaenzen', type: 'boolean', hint: 'Text, Vision und Packaging folgen deiner gespeicherten Reihenfolge. Surplus-Retries bleiben separat; Pins und spezielle Scorer bleiben erhalten.' },
     { key: 'surplusInsertEfforts', mod: 'surplusRouting', group: 'providers', label: 'Effort-Schritte in Reihenfolge', type: 'efforts', hint: 'Ein bis fuenf Schritte fuer geeignete Routen ohne vorhandenen Surplus-Schritt.' },
     { key: 'surplusAttempts', mod: 'surplusRetry', group: 'providers', label: 'Mindestversuche pro Surplus-Aufruf', min: 1, max: 10, hint: 'Hoehere native Versuchslimits bleiben bestehen.' },
     { key: 'surplusRetryMinSec', mod: 'surplusRetry', group: 'providers', label: 'Minimale Wiederholungspause', min: 0, max: 120, unit: 's', hint: 'Untergrenze der zufaelligen Pause.' },

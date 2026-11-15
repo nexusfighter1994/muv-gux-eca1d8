@@ -99,7 +99,8 @@ function scanAlpha(file, frames, ffmpeg, signal) {
     {windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
     const expected = frames * 1920 * 1080;
     let min = 255, max = 0, pixels = 0, diagnostic = '', failure;
-    const stop = error => { failure ??= error; child.kill(); };
+    // Verification has no output to save; do not wait indefinitely for SIGTERM.
+    const stop = error => { if (failure) return; failure = error; child.kill('SIGKILL'); };
     const abort = () => stop(signal.reason ?? Error('alpha decode cancelled'));
     const timer = setTimeout(() => stop(Error('alpha decode deadline')), 30000);
     signal?.addEventListener('abort', abort, {once: true});
@@ -128,7 +129,7 @@ export async function verify(file, p, ffprobe = 'ffprobe', ffmpeg = 'ffmpeg', si
   const stat = await fs.stat(file);
   if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_OUTPUT) throw Error('artifact size');
   const output = await execFile(ffprobe, ['-v', 'error', '-count_frames', '-show_streams', '-show_format', '-of', 'json', file],
-    {timeout: 30000, windowsHide: true, signal, maxBuffer: 1024 * 1024});
+    {timeout: 30000, killSignal: 'SIGKILL', windowsHide: true, signal, maxBuffer: 1024 * 1024});
   if (output.stderr.trim()) throw Error('alpha probe/decode error');
   const v = checkProbe(JSON.parse(output.stdout), p);
   const frames = Math.ceil(p.duration * 24);

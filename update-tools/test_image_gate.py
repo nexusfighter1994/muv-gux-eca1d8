@@ -78,7 +78,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["native_version"], VERSION)
         self.assertEqual(result["package_version"], "1.0.0")
-        self.assertEqual(result["required_hooks"], 40)
+        self.assertEqual(result["required_hooks"], 46)
         self.assertEqual(len(result["syntax"]), len(image.REQUIRED_JS))
         self.assertEqual(len(result["sha256"][image.HOOKS]), 64)
 

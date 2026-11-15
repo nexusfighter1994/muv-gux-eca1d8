@@ -7,7 +7,7 @@ const { createFrameshiftRoute } = require('../node/home-graphics/motion-offload/
 const ALPHA = '<!doctype html><html><head><meta charset="utf-8"><style>a{}</style></head><body><div id="root" data-composition-id="main" data-start="0" data-duration="3.4" data-width="1920" data-height="1080">x</div></body></html>';
 const OPAQUE = '<html><div data-composition-id="main" data-duration="2.5">x</div></html>';
 
-function setup({ homeFails = false, licensed = 'job', homeMotion = true } = {}) {
+function setup({ homeFails = false, licensed = 'job', homeMotion = true, nativeResult = () => ({ native: true }) } = {}) {
   const als = new AsyncLocalStorage();
   const lease = { resourceKey: 'frameshift', released: false, parked: false, signal: new AbortController().signal };
   const scope = { jobId: 'job', lanes: new Set(['render']), leases: new Map([['render', lease]]) };
@@ -23,7 +23,7 @@ function setup({ homeFails = false, licensed = 'job', homeMotion = true } = {}) 
     jp: new Map([['job', { checkAbort() {} }]]), Xl: () => null, isJobAborted: () => false,
     getConfig: () => ({ getSettings: () => ({ homeMotion }), getToken: () => 't', contract: 'c' }),
     loadAlpha: async () => ({ createAlphaHook: fakeHook('alpha') }), loadOpaque: async () => ({ createMotionHook: fakeHook('opaque') }) });
-  let render = async function (options) { calls.native.push(options); return { native: true }; };
+  let render = async function (options) { calls.native.push(options); return nativeResult(); };
   render = route.wrap(render);
   const run = options => als.run(scope, () => render(options));
   return { route, run, calls, render };
@@ -41,12 +41,40 @@ test('alpha MOV overlay and opaque MP4 (workers 3) are routed to Home', async ()
   assert.deepEqual(s.route.stats.alpha, { tried: 1, home: 1, native: 0 });
 });
 
+test('localized alpha overlays (<html lang="ko">) are routed to Home with the HTML unchanged', async () => {
+  const s = setup();
+  const localized = ALPHA.replace('<html>', '<html lang="ko">')
+    .replace('</style></head>', '</style>\n<style>body *{unicode-bidi:plaintext}</style></head>');
+  assert.equal((await s.run({ ...base, compositionHtml: localized, format: 'mov', workers: 3 })).home, 'alpha');
+  assert.equal(s.calls.home[0].meta.duration, 3.4);
+  for (const bad of ['<html lang="ko" dir="rtl">', '<html lang="x">', '<html data-x="1">']) {
+    const r = setup();
+    assert.deepEqual(await r.run({ ...base, compositionHtml: ALPHA.replace('<html>', bad), format: 'mov' }), { native: true }, bad);
+    assert.equal(r.route.stats.reasons.alpha_composition, 1, bad);
+  }
+});
+
 test('Home failure falls back exactly once to the original renderer, inside bypass', async () => {
   const s = setup({ homeFails: true });
   assert.deepEqual(await s.run({ ...base, compositionHtml: OPAQUE, workers: 3 }), { native: true });
   assert.equal(s.calls.native.length, 1);
   assert.equal(s.calls.home.length, 1);
   assert.equal(s.route.stats.opaque.native, 1);
+});
+
+test('pending server fallback does not retain real Home occupancy', async () => {
+  let release;
+  const native = new Promise(resolve => { release = resolve; });
+  const s = setup({ homeFails: true, nativeResult: () => native });
+  const pending = s.run({ ...base, compositionHtml: OPAQUE, workers: 3 });
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(s.calls.native.length, 1);
+    assert.equal(s.route.stats.active, 1, 'whole route remains in progress');
+    assert.equal(s.route.stats.homeInFlight, 0, 'Home target was already released');
+  } finally { release({ native: true }); await pending; }
+  assert.equal(s.route.stats.homeInFlight, 0);
+  assert.equal(s.route.stats.active, 0);
 });
 
 test('Home artifact attribution follows successful route only, never a native fallback', async () => {

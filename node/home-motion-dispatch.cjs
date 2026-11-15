@@ -3,7 +3,12 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const {AsyncLocalStorage} = require('node:async_hooks');
 const STAGING_MB = 1024, FLOOR_MB = 4096, MAX_RECOVERING = 2;
+// vf-custom:motion-staging-256-v1 (2026-11-12): the RAM-budget estimate of a Home motion render is 256 MB, not
+// STAGING_MB. Its server side is the dispatcher CLI (41 MB RSS measured, max 46 MB); 1024 MB per scope
+// kept 8-9 GB of the budget. STAGING_MB still guards real MemAvailable when admitting new scopes.
+const ESTIMATE_MB = 256;
 const recovery = new AsyncLocalStorage();
+const validation = require('./home-motion-validation.cjs');
 
 // Only reviewed render-only callbacks. Validation, probes and unknown callbacks
 // must obtain native admission before running any browser or FFmpeg process.
@@ -13,7 +18,7 @@ function renderOnly(callback, mock = true) {
   const source = String(callback);
   const direct = ['()=>N.render($)', '()=>d.render({...h,targetPath:t,workDir:s,timeoutMs:Number(n.timeoutMs)||1200*1e3})'];
   const opaque = 'async()=>{if(j3()){await _c(i,Math.max(Number(o)||.1,.1),{fps:v_e});return}await __vfMotion.render(t.render.bind(t),{jobId:r,licensedJobId:w8(),getScope:()=>S0e.getStore(),lane:YL("frameshift"),checkAbort:()=>af.get(r)?.checkAbort?.(),isAborted:()=>e.isJobAborted(r),outerSignal:cl(),duration:o},{compositionHtml:w_e(n.html,o),assets:n.assets,fps:v_e,resolution:fWt,targetPath:i,workDir:s,timeoutMs:PWs,renderOnlyHtml:eBn(n.html)+mJe(c,{pacing:l})+(a?w7n({fps:v_e}):"")||void 0,...u?.workers?{workers:u.workers}:{},...u?.quality?{quality:u.quality}:{}})}';
-  return DIRECT.has(source) || direct.includes(source) || (!mock && (source === OPAQUE || source === opaque));
+  return DIRECT.has(source) || direct.includes(source) || (!mock && (source === OPAQUE || source === opaque || validation.isCallback(callback)));
 }
 function availableMb() {
   try { return Number(/MemAvailable:\s+(\d+) kB/.exec(fs.readFileSync('/proc/meminfo','utf8'))?.[1] || 0)/1024; }
@@ -25,7 +30,9 @@ function createQueue({getState,getCapacity,claim,isAborted=()=>false,available=a
   const owned=s=>s?.kind==='motion-home' && scopes.get(s.nonce)===s;
   const homeCount=()=>[...scopes.values()].filter(s=>s.phase==='home').length;
   const recovering=()=>[...scopes.values()].filter(s=>s.phase!=='home').length;
-  const eligible=w=>w.resourceKey==='frameshift' && ['motion-home','motion-candidate'].includes(w.homeKind)
+  const validationCount=()=>[...scopes.values()].filter(s=>s.validation&&s.phase==='home').length;
+  const eligible=w=>w.resourceKey==='frameshift' && ['motion-home','motion-candidate','motion-validation'].includes(w.homeKind)
+    && (w.homeKind!=='motion-validation'||(globalThis.__vfHomeMotionValidation?.ready()&&validationCount()<2))
     && !isAborted(w.jobId);
   const cap=()=>Math.max(0,Math.min(8,Number(getCapacity())||0));
   const q={
@@ -40,7 +47,7 @@ function createQueue({getState,getCapacity,claim,isAborted=()=>false,available=a
             .sort((a,b)=>a.priority<b.priority?-1:a.priority>b.priority?1:a.seq-b.seq)[0];
           if(!w)break;
           const s={kind:'motion-home',nonce:crypto.randomUUID(),jobId:w.jobId,resourceKey:'frameshift',
-            opKey:w.opKey,quality:w.quality,seq:w.seq,phase:'home',candidate:w.homeKind==='motion-candidate',at:Date.now()};
+            opKey:w.opKey,quality:w.quality,seq:w.seq,phase:'home',validation:w.homeKind==='motion-validation',candidate:w.homeKind==='motion-candidate',at:Date.now()};
           scopes.set(s.nonce,s);
           try { claim(w,s);admitted++; } catch(e) { scopes.delete(s.nonce);throw e; }
         }
@@ -63,7 +70,7 @@ function createQueue({getState,getCapacity,claim,isAborted=()=>false,available=a
     },
     stats(){return {capacity:cap(),active:scopes.size,homeActive:homeCount(),recovering:recovering(),
       queued:getState().waiters.filter(eligible).length,admitted,completed,failed,
-      stagingMb:scopes.size*STAGING_MB,nativeRecovered:q.nativeRecovered||0,
+      stagingMb:scopes.size*STAGING_MB,nativeRecovered:q.nativeRecovered||0,validationActive:validationCount(),
       candidates:[...scopes.values()].filter(s=>s.candidate).length,checkedAt:new Date().toISOString()};},
   };
   return q;
@@ -77,7 +84,7 @@ function attachExecution(q,{getContext,runIndependent,runNative,isAborted=()=>fa
     if(!q.valid(s)||recovery.getStore())return fn();
     if(s.recovering)throw Error('Concurrent Home Motion native recovery rejected');
     s.recovering=true;s.phase='native-wait';
-    const controller=new AbortController(),signals=[controller.signal,lease.signal,AbortSignal.timeout(900000)].filter(Boolean);
+    const controller=new AbortController(),signals=[controller.signal,lease.signal,AbortSignal.timeout(1800000 /* vf-custom:motion-recovery-limit-v1, was 900000 */)].filter(Boolean);
     const signal=AbortSignal.any(signals);
     const watch=setInterval(()=>{if(isAborted(s.jobId)||lease.released)controller.abort(Error('Motion scope ended'));},1000);watch.unref?.();
     const check=()=>{
@@ -104,7 +111,7 @@ function attachExecution(q,{getContext,runIndependent,runNative,isAborted=()=>fa
   return q;
 }
 function wrapEstimate(original){
-  return function(request={}){const result=original.call(this,request);return request.resourceKey==='motionHome'?{...result,mb:STAGING_MB}:result;};
+  return function(request={}){const result=original.call(this,request);return request.resourceKey==='motionHome'?{...result,mb:ESTIMATE_MB}:result;};
 }
 function guardRoute(route,queue){
   const call=route.call,guarded=new WeakMap();
@@ -134,7 +141,9 @@ function install(deps){
       const cfg=getSettings(),health=globalThis.__vfHomeCapabilities,route=globalThis.__vfFrameshiftRoute;
       if(queue?.enabled===false||!cfg?.homeMotion||!route||!health?.ready||Date.now()-health.checkedAt>20000)return 0;
       const limit=Number.isSafeInteger(cfg.motionSlots)&&cfg.motionSlots>=1&&cfg.motionSlots<=8?cfg.motionSlots:2;
-      const external=Math.max(0,(route.stats?.active||0)-(queue?.statsHomeCount?.()||0));
+      const measured=route.stats?.homeInFlight;
+      const occupied=Number.isSafeInteger(measured)&&measured>=0?measured:(route.stats?.active||0);
+      const external=Math.max(0,occupied-(queue?.statsHomeCount?.()||0));
       return Math.max(0,limit-external);
     }catch{return 0;}
   };
@@ -166,7 +175,7 @@ function install(deps){
   const run=scheduler.run;
   const wrapped=function(jobId,resource,callback,options){
     if(resource==='frameshift'&&options?.homeKind!=='motion-native-recovery')
-      options={...options,homeKind:renderOnly(callback,isMock())?'motion-home':'motion-native'};
+      options={...options,homeKind:validation.isCallback(callback)?'motion-validation':renderOnly(callback,isMock())?'motion-home':'motion-native'};
     return run.call(this,jobId,resource,callback,options);
   };
   Object.assign(wrapped,run);wrapped.__vfHomeMotion=true;scheduler.run=wrapped;
@@ -176,7 +185,7 @@ function install(deps){
   let migrated=0;
   for(const w of getState().waiters)if(w.resourceKey==='frameshift'&&!w.homeKind){w.homeKind='motion-candidate';migrated++;}
   q.migrated=migrated;
-  const tick=()=>{try{homeCount=q.stats().homeActive;q.drain();homeCount=q.stats().homeActive;}catch(e){console.warn('[home-motion] dispatch deferred',e?.name);}};
+  const tick=()=>{try{const before=q.stats();homeCount=before.homeActive-before.validationActive;q.drain();const after=q.stats();homeCount=after.homeActive-after.validationActive;}catch(e){console.warn('[home-motion] dispatch deferred',e?.name);}};
   q.timer=setInterval(tick,1000);q.timer.unref?.();
   guardRoute(globalThis.__vfFrameshiftRoute,q);
   if(remote){const begin=remote.begin;remote.begin=function(resource='frameshift'){

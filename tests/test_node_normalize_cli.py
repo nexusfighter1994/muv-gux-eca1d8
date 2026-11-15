@@ -74,6 +74,27 @@ class NormalizeCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(value['root'], self.projects.resolve())
         self.assertEqual(self.request, before)
 
+    def test_native_explicit_mp4_muxer_form_is_qualified_as_the_canonical_recipe(self):
+        request = copy.deepcopy(self.request)
+        request['argv'][25:25] = ['-f', 'mp4']
+        before = copy.deepcopy(request)
+        value = self.cli.qualify(request)
+        self.assertEqual(value['argv'], self.request['argv'], 'Home gets the canonical 26-argument recipe')
+        self.assertEqual(value['output'], self.output.resolve())
+        self.assertEqual(request, before, 'the request itself is not mutated')
+
+    def test_only_the_exact_trailing_mp4_muxer_pair_is_tolerated(self):
+        for pair, position in ((['-f', 'mov'], 25), (['-f', 'matroska'], 25), (['-F', 'mp4'], 25),
+                               (['-f', 'mp4'], 23), (['-f', 'mp4'], 0), (['-an', '-sn'], 25)):
+            request = copy.deepcopy(self.request)
+            request['argv'][position:position] = pair
+            with self.subTest(pair=pair, position=position), self.assertRaises(ValueError):
+                self.cli.qualify(request)
+        request = copy.deepcopy(self.request)
+        request['argv'][25:25] = ['-f', 'mp4', '-f', 'mp4']
+        with self.assertRaises(ValueError):
+            self.cli.qualify(request)
+
     def test_native_crf_range_and_plain_normalization_are_supported(self):
         for crf in ('0', '17', '51'):
             request = copy.deepcopy(self.request)

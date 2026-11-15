@@ -27,17 +27,20 @@ PACKAGE = "/app/server/package.json"
 CUSTOM = "/app/server/dist/vf-custom"
 HOOKS = CUSTOM + "/hooks-build.json"
 MODULES = (
+    "openai-images.cjs",
+    "render-prerequisite.cjs",
     "chunk-stall.mjs", "custom.mjs", "ffmpeg-admission.mjs", "fish-free.mjs",
     "geomap-isolated.cjs", "geomap-worker.mjs", "gpu-render-events.mjs",
     "home-direct.mjs", "home-library-trim.mjs", "home-normalize.mjs", "home-queue.mjs",
-    "home-siglip-transport.mjs", "home-siglip.mjs", "image-preparer.cjs", "map-admission.mjs",
+    "home-siglip-transport.mjs", "home-siglip.mjs", "home-ocr.cjs", "image-preparer.cjs", "map-admission.mjs",
     "pc-boost-api.mjs", "pc-transfer-api.mjs", "sourcing-deadline.mjs",
     "stream-compat.mjs", "thumbnail-openlux.mjs", "thumbnail-subject-identity.cjs",
     "bounded-safe-join.cjs", "validate-copy.cjs", "long-assembly.cjs",
-    "home-camera.mjs", "home-camera-cli.mjs", "home-scenes.mjs",
-    "home-motion-dispatch.cjs",
+    "home-camera.mjs", "home-camera-cli.mjs", "home-scenes.mjs", "scene-preview-store.cjs",
+    "home-motion-dispatch.cjs", "home-motion-validation.cjs",
     "home-motion-recovery-order.cjs",
     "home-chunk-recovery.cjs", "fflow-resubmit.cjs",
+    "home-chunk-budget.cjs", "cgroup-pressure.cjs",
 )
 EXTERNAL_JS = (
     BUNDLE,

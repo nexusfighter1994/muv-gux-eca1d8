@@ -1,5 +1,9 @@
 # VidForge Custom Mods
 
+**Setting this up with Claude?** Give it [CLAUDE-SETUP.md](CLAUDE-SETUP.md) first: what the
+mods do, which secrets you create yourself (none are in this repository), install, runtime
+knobs and production lessons (state 2026-11-15).
+
 Current source release: **2026-10-24**, matching the server overlay in image 78
 on native VidForge **2026.10.22.12**. Start with [the current release and install
 guide](RELEASE-20261024.md), not the older dated guides.

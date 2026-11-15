@@ -77,6 +77,12 @@ def qualify(request):
     if not isinstance(request, dict) or set(request) != {'argv','options'}:
         raise ValueError('Exact argv/options payload required')
     argv, options = request['argv'], request['options']
+    # vf-custom:normalize-explicit-mp4-v1 - native now names the muxer ("-f", "mp4") right before its .mp4 output
+    # (28 arguments; found 2026-11-10: every credit/normalize call was "not_eligible" and ran on the server).
+    # A .mp4 output selects that same muxer, so qualify and send the canonical 26-argument recipe.
+    if (isinstance(argv, list) and len(argv) == 28 and argv[25:27] == ['-f', 'mp4']
+            and isinstance(argv[27], str) and argv[27].lower().endswith('.mp4')):
+        argv = argv[:25] + argv[27:]
     if (not isinstance(argv, list) or len(argv) != 26 or
             not all(isinstance(x, str) and len(x) <= 32768 and
                     not any(c in x for c in ('\x00','\r','\n')) for x in argv)):

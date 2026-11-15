@@ -8,14 +8,21 @@
 // motion graphics. The live-headroom check (MemAvailable + reserve) still sees real RSS.
 const HOME_DISPATCH_MB = 160;
 const FALLBACKS = ['ffmpegHomeFallback', 'ffmpegHomeTrimFallback', 'ffmpegHomeNormalizeFallback'];
+// vf-custom:small-steps-v1 (2026-11-13): the bar detection before a credit render (small-steps.cjs) is a
+// 2-9 s probe. It reserves 256 MB instead of the learned 1.1-2.2 GB of ffmpeg:b_roll_video.
+const SMALL_STEP_KEY = 'ffmpegSmall', SMALL_STEP_MB = 256;
 
 function wrapHomeRamEstimate(original) {
-  if (original.__vfHomeRamVersion === 'home-only-v6') return original;
+  if (original.__vfHomeRamVersion === 'home-only-v7') return original;
   const wrapped = function (request = {}) {
     if (FALLBACKS.includes(request.resourceKey)) {
       const composition = request.resourceKey === 'ffmpegHomeFallback';
       const estimate = original.call(this, { ...request, resourceKey: composition ? 'fflowComposition' : 'ffmpeg' });
       return { ...estimate, mb: Math.max(estimate.mb, composition ? 1536 : 512) };
+    }
+    if (request.resourceKey === SMALL_STEP_KEY) {
+      const estimate = original.call(this, { ...request, resourceKey: 'ffmpeg' });
+      return { ...estimate, mb: SMALL_STEP_MB };
     }
     const estimate = original.call(this, request);
     // Reserve the dispatcher's server RAM, not the PC's rendering RAM; unknown Home keys
@@ -23,7 +30,7 @@ function wrapHomeRamEstimate(original) {
     return request.resourceKey === 'ffmpegHome' ? { ...estimate, mb: HOME_DISPATCH_MB } : estimate;
   };
   wrapped.__vfHomeRam = true;
-  wrapped.__vfHomeRamVersion = 'home-only-v6';
+  wrapped.__vfHomeRamVersion = 'home-only-v7';
   return wrapped;
 }
 
@@ -44,4 +51,5 @@ function wrapHomeGate(gate, { available = memAvailableMb, floorMb = HOME_FLOOR_M
   return wrapped;
 }
 
-module.exports = { wrapHomeRamEstimate, wrapHomeGate, memAvailableMb, HOME_DISPATCH_MB, HOME_FLOOR_MB };
+module.exports = { wrapHomeRamEstimate, wrapHomeGate, memAvailableMb, HOME_DISPATCH_MB, HOME_FLOOR_MB,
+  SMALL_STEP_KEY, SMALL_STEP_MB };

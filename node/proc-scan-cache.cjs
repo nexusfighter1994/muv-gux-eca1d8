@@ -5,7 +5,14 @@
 // each run read /proc/<pid>/stat for every process (~170 with 3 motion renders and 30+
 // ffmpeg leases) on the main thread: several full scans per second, health 1-8 s.
 // The native sampler exposes two hooks for exactly this: a process-table provider (q5t)
-// and a PSS reader (SOn). The table is reused for ttlMs; PSS is read like native.
+// and a PSS reader (SOn). The table is reused for ttlMs.
+//
+// PSS (2026-11-10): the sampler reads /proc/<pid>/smaps_rollup for every process of a render tree on
+// its first sample, whenever the tree's RSS grew 5 % and every 10th sample. The kernel walks all page
+// tables for that file, and under load the sampler runs several times per second (every spawn, every
+// lease finish), so a growing Chromium tree was re-read on each run: perf on the API main thread
+// showed 8.3 % of its CPU time in show_smaps_rollup. A value per pid is now reused for pssTtlMs
+// (1 s, the sampler's own base interval). Unreadable processes are never cached.
 const fs = require('node:fs');
 
 const PAGE_BYTES = 4096;
@@ -36,9 +43,28 @@ function readPss(pid, fsImpl = fs) {
   } catch { return null; }
 }
 
-function createProcScan({ ttlMs = 500, now = Date.now, fsImpl = fs } = {}) {
+const PSS_CACHE_MAX = 2048;
+
+function createProcScan({ ttlMs = 500, pssTtlMs = 1000, now = Date.now, fsImpl = fs } = {}) {
   const stats = { scans: 0, hits: 0 };
+  const pssStats = { reads: 0, hits: 0 };
+  const pssAt = new Map(); // pid -> [readAtMs, bytes]
   let at = -Infinity, value = null;
+  const fresh = (entry, t) => t - entry[0] >= 0 && t - entry[0] < pssTtlMs;
+  function pss(pid) {
+    const t = now();
+    const hit = pssAt.get(pid);
+    if (hit && fresh(hit, t)) { pssStats.hits++; return hit[1]; }
+    pssStats.reads++;
+    const bytes = readPss(pid, fsImpl);
+    if (bytes == null) { pssAt.delete(pid); return null; }
+    if (pssAt.size >= PSS_CACHE_MAX) {
+      for (const [key, entry] of pssAt) if (!fresh(entry, t)) pssAt.delete(key);
+      if (pssAt.size >= PSS_CACHE_MAX) pssAt.clear();
+    }
+    pssAt.set(pid, [t, bytes]);
+    return bytes;
+  }
   function table() {
     const t = now();
     if (value && t - at >= 0 && t - at < ttlMs) { stats.hits++; return value; }
@@ -47,11 +73,11 @@ function createProcScan({ ttlMs = 500, now = Date.now, fsImpl = fs } = {}) {
     at = t;
     return value;
   }
-  return { table, pss: pid => readPss(pid, fsImpl), stats };
+  return { table, pss, stats, pssStats, pssCacheSize: () => pssAt.size };
 }
 
 const shared = createProcScan();
 globalThis.__vfProcScan = shared;
 
-module.exports = { createProcScan, readProcTable, readPss, PAGE_BYTES,
+module.exports = { createProcScan, readProcTable, readPss, PAGE_BYTES, PSS_CACHE_MAX,
   procScanTable: () => shared.table(), procScanPss: pid => shared.pss(pid), shared };

@@ -165,7 +165,7 @@ def integration():
         command(['/usr/sbin/ip', '-n', gateway_ns, 'link', 'set', 'vfeth', 'netns', vf_ns])
         command(['/usr/sbin/ip', '-n', gateway_ns, 'addr', 'add', '10.0.3.1/24', 'dev', name])
         command(['/usr/sbin/ip', '-n', gateway_ns, 'link', 'set', name, 'up'])
-        command(['/usr/sbin/ip', '-n', vf_ns, 'addr', 'add', '10.0.3.21/24', 'dev', 'vfeth'])
+        command(['/usr/sbin/ip', '-n', vf_ns, 'addr', 'add', module.VF_IP+'/24', 'dev', 'vfeth'])
         command(['/usr/sbin/ip', '-n', vf_ns, 'link', 'set', 'vfeth', 'up'])
     try:
         for namespace in (gateway_ns, vf_ns):

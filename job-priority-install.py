@@ -8,6 +8,7 @@ the scheduler module initialises after this tail hook.
 import re
 
 MARKER = '/* vf-custom:job-priority-v1 */'
+MAP_MARKER = '/* vf-custom:map-queue-priority-v1 */'
 
 
 def _one(pattern, text, what):
@@ -21,7 +22,7 @@ def patch_node(text):
     if MARKER in text:
         if text.count(MARKER) != 1:
             raise RuntimeError('Required job priority hook duplicated')
-        return text
+        return patch_maps(text)
     _, _, jobs, _ = _one(r'function ([\w$]+)\(([\w$]+)\)\{return ([\w$]+)\.get\(\2\)\?\.priority\?\?([\w$]+)\}', text, 'priority registry')
     lanes = _one(r'function [\w$]+\(([\w$]+)\)\{let ([\w$]+)=([\w$]+)\.get\(\1\);return \2\|\|\(\2=\{activeTotal:0,activeByJob:new Map',
                  text, 'lane states')[2]
@@ -34,4 +35,19 @@ def patch_node(text):
         f'progress:e=>{progress}(e),getDb:()=>{db},wake:()=>{{{drain}().catch(()=>{{}})}}}});'
         '__vfCustom.report("jobPriority",true)}catch(e){__vfCustom.report("jobPriority",false,String(e))}\n'
     )
-    return text + hook
+    return patch_maps(text + hook)
+
+
+def patch_maps(text):
+    if MAP_MARKER in text:
+        if text.count(MAP_MARKER) != 1:
+            raise RuntimeError('Required map priority hook duplicated')
+        return text
+    queues = re.findall(r'function [\w$]+\(\)\{if\([\w$]+\|\|([\w$]+)\.length===0\)return;', text)
+    if not queues:
+        return text  # Older native releases have no independent serial map queue.
+    if len(queues) != 1:
+        raise RuntimeError('Required serial map queue fingerprint ambiguous')
+    _, _, jobs, _ = _one(r'function ([\w$]+)\(([\w$]+)\)\{return ([\w$]+)\.get\(\2\)\?\.priority\?\?([\w$]+)\}', text, 'map priority registry')
+    return text + (f'\n{MAP_MARKER};try{{__vfCustom.installMapQueuePriority({{getQueue:()=>{queues[0]},getJobs:()=>{jobs}}});'
+                   '__vfCustom.report("mapQueuePriority",true)}catch(e){__vfCustom.report("mapQueuePriority",false,String(e))}\n')

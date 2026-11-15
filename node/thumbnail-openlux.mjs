@@ -12,6 +12,7 @@ export function createThumbnailOpenluxHooks({ getCredential, render, crop, suffi
   function wrapCli(original) {
     if (original.vfThumbnailOpenlux) return original;
     async function generate(args) {
+      if (globalThis.__vfOpenAIImages?.enabled?.()) return original.call(this, args);
       const credential = getCredential();
       if (!credential?.apiKey || !args.refImageLocalPath) return original.call(this, args);
       const result = await original.call(this, {

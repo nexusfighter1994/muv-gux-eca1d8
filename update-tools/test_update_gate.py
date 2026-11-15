@@ -18,13 +18,16 @@ class HookReportTests(unittest.TestCase):
     def good(self):
         return {"fingerprints": {}, "report": dict.fromkeys(gate.REQUIRED_HOOKS, "ok")}
 
-    def test_contract_has_40_distinct_functional_hooks(self):
-        self.assertEqual(len(gate.REQUIRED_HOOKS), 40)
-        self.assertEqual(len(set(gate.REQUIRED_HOOKS)), 40)
+    def test_contract_has_46_distinct_functional_hooks(self):
+        self.assertEqual(len(gate.REQUIRED_HOOKS), 46)
+        self.assertEqual(len(set(gate.REQUIRED_HOOKS)), 46)
         self.assertNotIn("node.bundle", gate.REQUIRED_HOOKS)
         self.assertIn("fflow.nativeFxDirectoryProtection", gate.REQUIRED_HOOKS)
         self.assertNotIn("fflow.fxOutputSentinel", gate.REQUIRED_HOOKS)
         self.assertIn("node.gpuRenderEvents", gate.REQUIRED_HOOKS)
+        self.assertIn("node.voiceJaKoCompatibility", gate.REQUIRED_HOOKS)
+        self.assertIn("node.sourceTextAlignment", gate.REQUIRED_HOOKS)
+        self.assertIn("node.surplusMarketplaceRetry", gate.REQUIRED_HOOKS)
 
     def test_contract_matches_staging_declarations_without_importing_installer(self):
         installer = HERE.parent / "apply.py"
@@ -67,10 +70,10 @@ class HookReportTests(unittest.TestCase):
                 with self.assertRaisesRegex(gate.HookReportError, "node.routes"):
                     gate.validate_hook_report(payload)
 
-    def test_reapply_marker_is_allowed_without_replacing_40_hooks(self):
+    def test_reapply_marker_is_allowed_without_replacing_46_hooks(self):
         payload = self.good()
         payload["report"]["node.bundle"] = "ok"
-        self.assertEqual(len(gate.validate_hook_report(payload)), 41)
+        self.assertEqual(len(gate.validate_hook_report(payload)), 47)
         del payload["report"]["node.routes"]
         with self.assertRaisesRegex(gate.HookReportError, "missing.*node.routes"):
             gate.validate_hook_report(payload)
