@@ -42,7 +42,7 @@ export const CONFIG_BOUNDS = Object.freeze({
   sceneWorkers: Object.freeze({ min: 0, max: 25 }),
   clipvaultBoost: Object.freeze({ min: 0, max: 200 }),
   ffmpegBoost: Object.freeze({ min: 0, max: 64 }),
-  motionSlots: Object.freeze({ min: 1, max: 8 }),
+  motionSlots: Object.freeze({ min: 1, max: 14 }),
   // Above 100 Home may take longer than the server's own render deadline (Home caps at 10 min).
   motionHomeShare: Object.freeze({ min: 50, max: 200 }),
   siglipServerEmbeds: Object.freeze({ min: 0, max: 25 }),

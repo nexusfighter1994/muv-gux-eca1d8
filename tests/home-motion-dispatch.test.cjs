@@ -22,7 +22,8 @@ test('claims ordered render-only work independent of blocked native RAM and slot
   f.q.release(scope,true);f.q.release(scope,true);assert.equal(f.q.stats().completed,1);
 });
 test('offline and staging memory pressure stop NEW work without invalidating active tokens',()=>{
-  const f=fixture();f.state.waiters.push(waiter('a'),waiter('b'));f.available(5500);f.q.drain();assert.equal(f.claimed.length,1);
+  // 21.11.: 256 MB per scope (was 1024): 4400-256 >= 4096 admits one, 4400-512 < 4096 stops the second.
+  const f=fixture();f.state.waiters.push(waiter('a'),waiter('b'));f.available(4400);f.q.drain();assert.equal(f.claimed.length,1);
   f.cap(0);f.q.drain();assert.equal(f.claimed.length,1);assert.equal(f.q.valid(f.claimed[0]),true);
   assert.equal(f.q.valid({...f.claimed[0]}),false,'tokens are owned object identities');
 });
@@ -158,4 +159,79 @@ test('installation keeps native gate, scopes, demand and remote counts correct',
     if(previous.r)globalThis.__vfFrameshiftRoute=previous.r;else delete globalThis.__vfFrameshiftRoute;
     if(previous.h)globalThis.__vfHomeCapabilities=previous.h;else delete globalThis.__vfHomeCapabilities;
   }
+});
+
+// 2026-11-21: the admission guard charged 1024 MB of server RAM per Home scope; 7 scopes needed 12.3 GB free.
+test('admission: 256 MB per scope by default admits Home work at 9-13 GB free; the knob can tighten it again',()=>{
+  const os=require('node:os'),path=require('node:path'),fsx=require('node:fs');
+  const file=path.join(os.tmpdir(),`vf-hmd-${process.pid}-${Math.random()}.json`);
+  const state={activeTotal:0,activeByResource:new Map(),activeByJob:new Map(),waiters:[]};
+  const claimed=[];let t=0;
+  const make=()=>api.createQueue({getState:()=>state,getCapacity:()=>9,available:()=>10000,admission:api.createAdmissionReader(file,fsx,5000,()=>t),
+    claim(w,s){state.waiters.splice(state.waiters.indexOf(w),1);claimed.push(s);}});
+  for(let i=0;i<9;i++)state.waiters.push(waiter('j'+i));
+  const q=make();q.drain();
+  assert.equal(claimed.length,9,'10 GB free: 9 x 256 MB + 4096 MB floor fit');
+  assert.equal(q.stats().stagingMb,9*256);
+  fsx.writeFileSync(file,JSON.stringify({admitMb:1024}));t+=6000;
+  for(let i=0;i<9;i++)state.waiters.push(waiter('k'+i));claimed.length=0;
+  const q2=make();q2.drain();
+  assert.equal(claimed.length,5,'old charge: 10000-6*1024 < 4096 stops after five');
+  fsx.unlinkSync(file);
+});
+test('recoveryRoom: recovering scopes stop blocking Home admission only as far as the knob allows',()=>{
+  const os=require('node:os'),path=require('node:path'),fsx=require('node:fs');
+  const file=path.join(os.tmpdir(),`vf-hmd-rr-${process.pid}-${Math.random()}.json`);
+  const run=room=>{
+    if(room===null){try{fsx.unlinkSync(file);}catch{}}else fsx.writeFileSync(file,JSON.stringify({recoveryRoom:room}));
+    const state={activeTotal:0,activeByResource:new Map(),activeByJob:new Map(),waiters:[]};const claimed=[];
+    const q=api.createQueue({getState:()=>state,getCapacity:()=>9,available:()=>20000,admission:api.createAdmissionReader(file,fsx,0,()=>0),
+      claim(w,s){state.waiters.splice(state.waiters.indexOf(w),1);claimed.push(s);}});
+    for(let i=0;i<30;i++)state.waiters.push(waiter('r'+i));
+    q.drain();assert.equal(claimed.length,9);
+    for(const s of claimed)s.phase='native-wait';   // all nine fell back to the server and wait there
+    q.drain();return q.stats();
+  };
+  const def=run(null);
+  assert.equal(def.active,11,'default: cap + MAX_RECOVERING as before');assert.equal(def.homeActive,2);
+  const wide=run(20);
+  assert.equal(wide.homeActive,9,'Home keeps all its slots');assert.equal(wide.active,18);
+  const tight=run(4);
+  assert.equal(tight.active,13);assert.equal(tight.homeActive,4);
+  fsx.unlinkSync(file);
+});
+test('admission reader: defaults, bounds, cache and missing file',()=>{
+  const fsx=require('node:fs');let t=0;let body='{"admitMb":10,"floorMb":999999}';let reads=0;
+  const fake={readFileSync:()=>{reads++;return body;}};
+  const r=api.createAdmissionReader('/x',fake,5000,()=>t);
+  assert.deepEqual(r(),{admitMb:256,floorMb:4096,recoveryRoom:2,maxRecovering:2},'out-of-range values fall back');
+  body='{"admitMb":512,"floorMb":6144,"recoveryRoom":20}';assert.deepEqual(r(),{admitMb:256,floorMb:4096,recoveryRoom:2,maxRecovering:2},'cached within 5 s');
+  t+=5000;assert.deepEqual(r(),{admitMb:512,floorMb:6144,recoveryRoom:20,maxRecovering:2});assert.equal(reads,2);
+  const missing=api.createAdmissionReader('/definitely/missing.json',fsx,0,()=>0);
+  assert.deepEqual(missing(),{...api.ADMIT_DEFAULTS});
+});
+
+test('maxRecovering knob: more than two native recoveries may run at once; default stays 2',async()=>{
+  const run=async limit=>{
+    const scopes=[];let active=0,peak=0;const gates=[];
+    const leases=new Map();const store={leases};
+    const q={valid:s=>scopes.includes(s)};
+    api.attachExecution(q,{getContext:()=>store,runIndependent:fn=>fn(),isAborted:()=>false,isMock:()=>false,
+      admission:()=>({maxRecovering:limit}),
+      runNative:(jobId,fn)=>fn()});
+    const one=()=>{
+      const s={jobId:'j',phase:'home'};scopes.push(s);
+      const lease={boosted:s,released:false};
+      leases.set('render',lease);
+      return q.native(()=>new Promise(res=>{active++;peak=Math.max(peak,active);gates.push(()=>{active--;res('ok');});}));
+    };
+    const all=[];for(let i=0;i<5;i++)all.push(one());
+    await new Promise(r=>setTimeout(r,350));
+    const seen=peak;
+    while(gates.length||active){const g=gates.shift();if(g)g();await new Promise(r=>setTimeout(r,130));}
+    await Promise.all(all);
+    return seen;
+  };
+  assert.equal(await run(2),2);
+  assert.equal(await run(5),5);
 });

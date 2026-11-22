@@ -33,7 +33,9 @@ test('motion settings are bounded (slots 1..4, Home share 50..200 %) and default
   assert.equal(api.DEFAULT_CONFIG.motionHomeShare, 70);
   assert.equal(api.validateConfig({ motionSlots: 4, motionHomeShare: 90 }).motionSlots, 4);
   assert.equal(api.validateConfig({ motionHomeShare: 200 }).motionHomeShare, 200);
-  for (const patch of [{ motionSlots: 0 }, { motionSlots: 9 }, { motionSlots: 2.5 }, { motionHomeShare: 49 }, { motionHomeShare: 201 }, { motionHomeShare: '80' }]) {
+  assert.equal(api.validateConfig({ motionSlots: 9 }).motionSlots, 9);
+  assert.equal(api.validateConfig({ motionSlots: 14 }).motionSlots, 14);
+  for (const patch of [{ motionSlots: 0 }, { motionSlots: 15 }, { motionSlots: 2.5 }, { motionHomeShare: 49 }, { motionHomeShare: 201 }, { motionHomeShare: '80' }]) {
     assert.throws(() => api.validateConfig(patch), error => error.status === 400, JSON.stringify(patch));
   }
   assert.ok(!api.PC_CONFIG_KEYS.includes('motionSlots') && !api.PC_CONFIG_KEYS.includes('motionHomeShare'), 'server-side only, never pushed to Home');
@@ -59,7 +61,7 @@ test('a legacy pc_boost row (written before this change) loads with motion defau
   const db = database();
   db.prepare('INSERT INTO app_settings VALUES (?, ?)').run('pc_boost', JSON.stringify({ enabled: true, cpuWorkers: 18, gpuWorkers: 6,
     siglipEnabled: true, siglipConcurrency: 14, sceneWorkers: 0, clipvaultBoost: 35, ffmpegBoost: 14 }));
-  db.prepare('INSERT INTO app_settings VALUES (?, ?)').run('pc_motion', JSON.stringify({ motionSlots: 9 }));
+  db.prepare('INSERT INTO app_settings VALUES (?, ?)').run('pc_motion', JSON.stringify({ motionSlots: 15 }));
   const config = api.createConfigStore({ db, publish() {} }).get();
   assert.equal(config.enabled, true);
   assert.equal(config.cpuWorkers, 18);
@@ -70,7 +72,8 @@ test('a legacy pc_boost row (written before this change) loads with motion defau
 test('motionLimits reads the published runtime file values with safe fallbacks', () => {
   assert.deepEqual(motionLimits({ motionSlots: 4, motionHomeShare: 90 }), { motionSlots: 4, motionHomeShare: 90 });
   assert.deepEqual(motionLimits({ motionSlots: 8, motionHomeShare: 200 }), { motionSlots: 8, motionHomeShare: 200 });
-  assert.deepEqual(motionLimits({ motionSlots: 9, motionHomeShare: 20 }), { motionSlots: 2, motionHomeShare: 70 });
+  assert.deepEqual(motionLimits({ motionSlots: 9, motionHomeShare: 90 }), { motionSlots: 9, motionHomeShare: 90 });
+  assert.deepEqual(motionLimits({ motionSlots: 15, motionHomeShare: 20 }), { motionSlots: 2, motionHomeShare: 70 });
   assert.deepEqual(motionLimits({ motionSlots: 1, motionHomeShare: 150 }), { motionSlots: 1, motionHomeShare: 150 });
   assert.equal(motionLimits({ motionHomeShare: 201 }).motionHomeShare, 70);
   assert.deepEqual(motionLimits(null), { motionSlots: 2, motionHomeShare: 70 });

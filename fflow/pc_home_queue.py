@@ -303,10 +303,17 @@ def install_composition_timeout_diagnostics(engine):
             scope=HOME_SCOPE.get()
             if not scope or scope.get('kind')!='composition':
                 return await original(*args,**kwargs)
+            started=time.monotonic()
             try:return await original(*args,**kwargs)
             except TimeoutError as error:
                 logging.getLogger(__name__).exception('Home composition inner timeout in %s',name)
                 raise RuntimeError('Home composition inner timeout in '+name) from error
+            finally:
+                # vf-custom:offload-timing-v1: seconds per composition phase (see pc_ffmpeg_hook.write_timing).
+                state=WORK_STATE.get()
+                if state is not None:
+                    phases=state.setdefault('phases',{})
+                    phases[name]=round(phases.get(name,0)+time.monotonic()-started,2)
         call._vf_home_timeout_guard=True
         return call
     for name in names:
@@ -357,6 +364,7 @@ def install_worker(worker_cls,executor_cls):
             except ValueError:composition={}
         token=HOME_SCOPE.set(scope_from_composition(composition))
         work=WORK_STATE.set({'remoteVerified':False,'nativeStarted':False})
+        began=time.monotonic()
         try:
             if HOME_SCOPE.get() and HOME_SCOPE.get().get('kind')=='composition':
                 install_composition_timeout_diagnostics(getattr(self,'engine',None))
@@ -364,6 +372,16 @@ def install_worker(worker_cls,executor_cls):
                 return await run_cancel_aware(lambda:original(self,job_id,job_data),
                     lambda:self.job_queue.get_job(job_id))
             return await original(self,job_id,job_data)
-        finally:WORK_STATE.reset(work);HOME_SCOPE.reset(token)
+        finally:
+            try:
+                state=WORK_STATE.get() or {}
+                if state.get('phases'):
+                    try:from .pc_ffmpeg_hook import write_timing
+                    except ImportError:from pc_ffmpeg_hook import write_timing
+                    write_timing({'t':round(time.time()),'job':True,'phases':state['phases'],
+                        'remote':bool(state.get('remoteVerified')),'native':bool(state.get('nativeStarted')),
+                        'total':round(time.monotonic()-began,2)})
+            except Exception:pass
+            WORK_STATE.reset(work);HOME_SCOPE.reset(token)
     worker_cls._process_job=process
     worker_cls._vf_home_installed=True

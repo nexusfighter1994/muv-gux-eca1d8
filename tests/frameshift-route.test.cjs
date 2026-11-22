@@ -243,8 +243,8 @@ test('motionSlots from the live PC Boost settings bounds parallel Home offers (c
   assert.equal(r.nativeCount(), 1);
 });
 
-test('invalid motionSlots keep the default of 2; the slot cap is 8', async () => {
-  for (const motionSlots of [0, 9, 2.5, '3', null]) {
+test('invalid motionSlots keep the default of 2; the slot cap is 14', async () => {
+  for (const motionSlots of [0, 15, 2.5, '3', null]) {
     const r = liveRoute({ motionSlots });
     const a = r.run(), b = r.run();
     await tick();

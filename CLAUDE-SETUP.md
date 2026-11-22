@@ -138,14 +138,21 @@ Write them as uid 10001, mode 644, via a temp file plus rename.
 
 | File / setting | Our value | Meaning |
 |---|---|---|
-| PC Boost (`/custom` or `PATCH /api/pc-boost`) | cpuWorkers 12, gpuWorkers 13, motionSlots 8, siglipConcurrency 8 | Home worker slots |
-| VidForge `maxActiveVideos` | 9 | Parallel videos (16-core server) |
-| `pc-home-dispatch-limit.json` | `{"slots": 40}` | Max Home jobs in flight |
-| `vf-home-claim.json` | `{"compositionCap": 6}` | How many Home slots chunk compositions may hold |
+| PC Boost (`/custom` or `PATCH /api/pc-boost`) | cpuWorkers 12, gpuWorkers 13, motionSlots 9, siglipConcurrency 8 | Home worker slots |
+| VidForge `maxActiveVideos` | 8 | Parallel videos (16-core server) |
+| `pc-home-dispatch-limit.json` | `{"slots": 48}` | Max Home jobs in flight |
+| `vf-home-claim.json` | `{"compositionCap": 10}` | How many Home slots chunk compositions may hold (bound by the home line upload, not CPU) |
 | `vf-siglip-candidate-cap.json` | `{"cap": 3}` | Unconfirmed Home SigLIP candidates (OCR to Home also queues here) |
-| `vf-real-headroom.json` | `{"enabled":true,"floorMb":8192,"recentMs":10000,"pendingShare":0.25}` | Admit by real free RAM over the app estimate |
+| `vf-real-headroom.json` | `{"enabled":true,"floorMb":12288,"recentMs":60000,"pendingShare":0.25,"renderLiveHeadroom":true,"hardFloorMb":8192}` | Admit by real free RAM over the app estimate; below `hardFloorMb` real free RAM nothing new starts |
 | `vf-small-steps.json` | `{"enabled":true}` | Short pre-render steps get priority |
-| `vf-home-verify.json` | `{"mode":"probe","sample":20,"alwaysMb":8}` | Check Home results with ffprobe, full decode on a sample |
+| `vf-home-verify.json` | `{"mode":"probe","sample":20,"alwaysMb":4096}` | Check Home results with ffprobe, full decode on a sample |
+| Home PC `ffmpeg/runtime/verify-sample.json` | `{"every": 20}` | The Home worker decodes its own output fully only for 1 job in N (1 = every job, 0 = never) |
+| `vf-home-motion-dispatch.json` | `{"admitMb":64,"floorMb":4096,"recoveryRoom":6,"maxRecovering":2}` | Home Motion admission; keep `maxRecovering` low, recoveries render on the server |
+| `vf-motion-busy-retry.json` | `{"enabled":true,"waitMs":2500,"maxWaitMs":240000,"fastMs":20000,"minRenderMs":60000}` | Home answers 503 when its CPU slots are full: wait and ask again instead of falling back to the server |
+| `vf-single-pass-camera.json` | `{"enabled":true}` | Chunks whose only effects are zoom/pan compose in one pass (off without the file) |
+| `vf-oversize-chunk.json` | defaults: `{"enabled":true,"splitAbove":40,"partSegments":30}` | A chunk with more clips than FFlow accepts is composed in parts and joined |
+| `vf-pod-overflow.json` | defaults: `{"enabled":true,"minPodWaiters":4,"waiterFactor":0.5,"maxHomeQueued":6,"maxLocal":32}` | RunPod pool on: b-roll trims that only wait for a full pod go to the local lane, where Home claims them |
+| `vf-long-video-cap.json` | max 5 long videos (>= 8000 words) at once | Short videos keep the free slots |
 | `/custom` scheduling: earlyPhasePriority | on (default) | Videos before segment rendering go first |
 
 Server ffmpeg lane: 16 on a 16-core server. Lowering it made everything slower; when things
@@ -215,6 +222,29 @@ list and private folder path to your setup before the first use.
 - **Composite overlays** currently always run on the server; long overlay phases fill the
   server ffmpeg lane and Home gets less work meanwhile.
 - **Job records disappear?** The app purges old job records every hour by itself.
+- **Chunk with too many clips (2026-11-22).** A text-to-audio alignment can leave minutes of narration in the
+  last chunk; the planner then fills it with 200+ clips and FFlow rejects the composition (HTTP 422, limit
+  100 segment entries). The app requeues the video every few minutes. `node/oversize-chunk.cjs` composes
+  such a chunk in parts and joins them (video by stream copy, audio re-encoded once to the exact frame
+  length). Parts run one after another, so it is slow, and the transition bake for a 15-minute chunk can
+  hit its 10-minute limit (the video then continues without those transitions).
+- **Pool on, Home idle (2026-11-22).** With the RunPod pool on, the app sends every b-roll trim through the
+  pod path and it waits there; the Home PC, which claims trims from the local ffmpeg lane, got 34 instead of
+  357 trims per 10 minutes. `node/pod-overflow.cjs` lets the surplus go to Home while the pod stays full.
+- **Zoom makes compositions slow (2026-11-22).** About 2 of 3 chunk compositions carried a `zoom` effect and
+  therefore ran FFlow's multi-pass chain (one encode per segment, concat, audio mix, final encode). With
+  `single-pass-camera-install.py` the camera move is rendered by the same renderer and fed into the single
+  pass: 33-44 % less time and CPU on two real chunks, SSIM 0.986-0.991 against the old output; in
+  production the average composition went from 369 s to 140 s. FFlow workers load code at start: send each
+  `python worker.py` a SIGTERM, it finishes its job and the process manager starts a fresh one.
+- **Home animations bounce (2026-11-22).** A Home animation uses one of the Home ffmpeg worker's CPU slots.
+  When all are taken, Home answers 503 within a few seconds; the hooks treated that as a failed render and
+  the animation landed in the Home Motion recovery lane (2 at a time), which then blocked every Home Motion
+  slot. `node/home-graphics/motion-offload/busy-retry.mjs` waits and asks again with a new job id. Under
+  full load the busy answer can take up to 8 s, real renders take 30-160 s; set `fastMs` between the two.
+  A bigger `recoveryRoom` does not help: the recovery lane just fills up to the new level.
+- **Double checking Home results.** A full decode of every Home output cost 32 % of the Home ffmpeg time and
+  found nothing in 300 failure records; size, hash and ffprobe checks stay, the full decode is sampled.
 
 ---
 

@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import {verify,MAX} from './worker.mjs';
 import remoteActive from '../remote-active.cjs';
+import {sendWithBusyRetry} from './busy-retry.mjs';
 // Same limits as alpha-hook.mjs: Home rejects deadlines above 10 min; a share beyond the deadline still leaves time to receive.
 const HOME_LIMIT_MS=600000,RECEIVE_MIN_MS=120000,HOME_SHARE_MIN=0.5,HOME_SHARE_MAX=2;
 const hash=b=>crypto.createHash('sha256').update(b).digest('hex');
@@ -25,7 +26,7 @@ export function createMotionHook(nativeRender,{endpoint,token,contract,permitted
     if(!Number.isInteger(sourceWorkers)||sourceWorkers<1||sourceWorkers>3)return nativeRender(options);
     // The Home contract accepts 0 < duration <= 15 s; never upload work it must reject.
     if(!(Number.isFinite(duration)&&duration>0&&duration<=15))return nativeRender(options);
-    const id=crypto.randomBytes(16).toString('hex');const headers={Authorization:'Bearer '+token,'Content-Type':'application/json'};
+    let id=crypto.randomBytes(16).toString('hex');const headers={Authorization:'Bearer '+token,'Content-Type':'application/json'};
     const budget=Math.min(timeoutMs,options.timeoutMs??600000),deadline=Date.now()+budget,baseReserve=Math.min(30000,budget/3);
     const fixedReserve=Number.isFinite(nativeReserveMs)&&nativeReserveMs>baseReserve?Math.min(Math.max(0,budget-1),nativeReserveMs):baseReserve;
     // A relative reserve keeps most of the deadline for server CPU recovery when Home is slow or lost.
@@ -43,9 +44,13 @@ export function createMotionHook(nativeRender,{endpoint,token,contract,permitted
       const assets=[];let total=0;for(const a of options.assets??[]){const b=await fs.readFile(a.localPath);total+=b.length;if(total>MAX)throw Error('input size');assets.push({filename:a.filename,sha256:hash(b),data:b.toString('base64')});}
       const healthSignal=Number.isFinite(healthTimeoutMs)&&healthTimeoutMs>0?AbortSignal.any([controller.signal,AbortSignal.timeout(Math.ceil(healthTimeoutMs))]):controller.signal;
       const health=await fetchImpl(new URL('/motion/health',base),{headers,signal:healthSignal});if(!health.ok)throw Error('Home offline');
-      const payload={version:1,id,contract,compositionHtml:options.compositionHtml,renderOnlyHtml:options.renderOnlyHtml??'',assets,fps:options.fps,resolution:options.resolution,workers:sourceWorkers,quality:options.quality??'standard',duration,timeoutMs:Math.max(1,Math.floor(homeDeadline-Date.now()))};
+      const payloadFor=jobId=>({version:1,id:jobId,contract,compositionHtml:options.compositionHtml,renderOnlyHtml:options.renderOnlyHtml??'',assets,fps:options.fps,resolution:options.resolution,workers:sourceWorkers,quality:options.quality??'standard',duration,timeoutMs:Math.max(1,Math.floor(homeDeadline-Date.now()))});
       possibleRemote=true;endRemote=remoteActive.begin(remoteResource);
-      const response=await fetchImpl(new URL('/motion/render',base),{method:'POST',headers,body:JSON.stringify(payload),signal:controller.signal});
+      // vf-custom:motion-busy-retry-v1: an instant 503 means Home has no free worker slot right now; ask again (new id) instead of
+      // falling back to the server at once. `id` always names the attempt in flight, for the cancel below.
+      const sent=await sendWithBusyRetry({firstId:id,homeDeadline,signal:controller.signal,send:async jobId=>{id=jobId;const body=payloadFor(jobId);
+        return {payload:body,response:await fetchImpl(new URL('/motion/render',base),{method:'POST',headers,body:JSON.stringify(body),signal:controller.signal})};}});
+      const payload=sent.payload,response=sent.response;
       if(!response.ok)throw Error('Home unavailable');
       // Home has rendered: receiving and verifying may use the whole budget; the native fallback keeps its own fresh budget.
       if(freshNativeBudget){clearTimeout(timer);timer=setTimeout(()=>controller.abort(Error('motion receive timeout')),Math.max(shareMode?RECEIVE_MIN_MS:1,deadline-Date.now()));}

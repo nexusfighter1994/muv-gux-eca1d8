@@ -3,10 +3,45 @@ const fs = require('node:fs');
 const crypto = require('node:crypto');
 const {AsyncLocalStorage} = require('node:async_hooks');
 const STAGING_MB = 1024, FLOOR_MB = 4096, MAX_RECOVERING = 2;
+// 2026-11-17 owner: "erhoehe dann wenigstens auf 9" -> Home motion bound 8 -> 14 (Home graphics gate 14);
+// the live value stays motionSlots. Native recovery limit 30 -> 60 min ("erhoehe die timeouts"): 51 animations
+// on 17.11. timed out at 1800 s while waiting for one of the MAX_RECOVERING native slots.
+const MAX_HOME = 14, RECOVERY_LIMIT_MS = 3600000;
 // vf-custom:motion-staging-256-v1 (2026-11-12): the RAM-budget estimate of a Home motion render is 256 MB, not
 // STAGING_MB. Its server side is the dispatcher CLI (41 MB RSS measured, max 46 MB); 1024 MB per scope
 // kept 8-9 GB of the budget. STAGING_MB still guards real MemAvailable when admitting new scopes.
 const ESTIMATE_MB = 256;
+// 2026-11-21 (owner: "Ja erhoehen deine Empfehlung machen go!"): the admission guard below still charged
+// STAGING_MB = 1024 MB of SERVER memory per Home scope plus a 4096 MB floor. With 7 scopes it needed 12.3 GB free;
+// the server had 9-13 GB, so Home Motion stopped taking work (homeActive 2-4 of cap 9, validations 0 of 2,
+// 829 validations waiting) while the Home PC sat idle. The guard now charges admitMb (default 256 = ESTIMATE_MB,
+// the measured server side of a Home scope) and keeps the floor. Hot knob, read every 5 s:
+// /data/runtime/vf-home-motion-dispatch.json {"admitMb": 32-4096, "floorMb": 1024-65536}.
+// 2026-11-21 09:20Z: Home scopes whose render falls back to the server ("recovering") wait for a render-lane
+// slot; while server RAM kept that lane closed, all cap+MAX_RECOVERING scopes were recovering, homeActive 0, no
+// Home animation for 10+ min (121 Home renders + 1101 validations waiting). recoveryRoom (knob, default
+// MAX_RECOVERING = unchanged) is how many recovering scopes may exist beyond cap before Home admission stops;
+// homeActive stays bounded by cap and the RAM guard below still charges every scope.
+const ADMIT_FILE = process.env.VF_HOME_MOTION_DISPATCH_FILE || '/data/runtime/vf-home-motion-dispatch.json';
+// 2026-11-21 13:20Z (owner: "Fixe es einfach!"): native recoveries (Home render fell back, mostly animations > 15 s)
+// ran only MAX_RECOVERING = 2 at a time, also when a RunPod pod renders them; 10 waiting recoveries plus 4
+// validations filled every Home scope and the Home graphics sat at 0/14 with 334 Home renders waiting.
+// maxRecovering (knob, default 2 = unchanged) is that limit; recoveryRoom may now go up to 120.
+const ADMIT_DEFAULTS = Object.freeze({ admitMb: ESTIMATE_MB, floorMb: FLOOR_MB, recoveryRoom: MAX_RECOVERING, maxRecovering: MAX_RECOVERING });
+function createAdmissionReader(file = ADMIT_FILE, fsImpl = fs, ttlMs = 5000, now = () => Date.now()) {
+  let cache = { at: -Infinity, cfg: { ...ADMIT_DEFAULTS } };
+  const num = (v, d, lo, hi) => { const n = Number(v); return Number.isFinite(n) && n >= lo && n <= hi ? n : d; };
+  return function admission() {
+    const t = now();
+    if (t - cache.at < ttlMs) return cache.cfg;
+    let raw = {};
+    try { raw = JSON.parse(fsImpl.readFileSync(file, 'utf8')) || {}; } catch { raw = {}; }
+    cache = { at: t, cfg: { admitMb: num(raw.admitMb, ADMIT_DEFAULTS.admitMb, 32, 4096), floorMb: num(raw.floorMb, ADMIT_DEFAULTS.floorMb, 1024, 65536),
+      recoveryRoom: Math.floor(num(raw.recoveryRoom, ADMIT_DEFAULTS.recoveryRoom, MAX_RECOVERING, 120)),
+      maxRecovering: Math.floor(num(raw.maxRecovering, ADMIT_DEFAULTS.maxRecovering, 1, 64)) } };
+    return cache.cfg;
+  };
+}
 const recovery = new AsyncLocalStorage();
 const validation = require('./home-motion-validation.cjs');
 
@@ -24,26 +59,36 @@ function availableMb() {
   try { return Number(/MemAvailable:\s+(\d+) kB/.exec(fs.readFileSync('/proc/meminfo','utf8'))?.[1] || 0)/1024; }
   catch { return 0; }
 }
-function createQueue({getState,getCapacity,claim,isAborted=()=>false,available=availableMb}) {
+function createQueue({getState,getCapacity,claim,isAborted=()=>false,available=availableMb,admission=createAdmissionReader()}) {
   const scopes = new Map();
   let draining=false,admitted=0,completed=0,failed=0;
   const owned=s=>s?.kind==='motion-home' && scopes.get(s.nonce)===s;
   const homeCount=()=>[...scopes.values()].filter(s=>s.phase==='home').length;
   const recovering=()=>[...scopes.values()].filter(s=>s.phase!=='home').length;
   const validationCount=()=>[...scopes.values()].filter(s=>s.validation&&s.phase==='home').length;
+  // Home validation slots as the Home worker reports them (home-motion-validation.cjs capacity(), 1-8; 2 before 21.11.).
+  const validationCap=()=>{const c=Number(globalThis.__vfHomeMotionValidation?.capacity?.());return Number.isInteger(c)&&c>=1&&c<=8?c:2;};
   const eligible=w=>w.resourceKey==='frameshift' && ['motion-home','motion-candidate','motion-validation'].includes(w.homeKind)
-    && (w.homeKind!=='motion-validation'||(globalThis.__vfHomeMotionValidation?.ready()&&validationCount()<2))
+    && (w.homeKind!=='motion-validation'||(globalThis.__vfHomeMotionValidation?.ready()&&validationCount()<validationCap()))
     && !isAborted(w.jobId);
-  const cap=()=>Math.max(0,Math.min(8,Number(getCapacity())||0));
+  const cap=()=>Math.max(0,Math.min(MAX_HOME,Number(getCapacity())||0));
   const q={
     valid:owned,
     drain(){
       if(draining)return;draining=true;
       try {
-        while(homeCount()<cap() && scopes.size<cap()+MAX_RECOVERING) {
-          if(available()-(scopes.size+1)*STAGING_MB<FLOOR_MB)break;
+        for(;;) {
+          const adm=admission();
+          // Renders use the Home graphics slots (cap), validations the Home validation worker (validationCap): each
+          // kind has its own room. 21.11. 13:45Z: 9 renders held every slot, 0 of 4 validations ran, 131 waited.
+          // Recovering scopes fill cap+recoveryRoom for renders only. No validations while Home Motion is off (cap 0).
+          const on=cap()>0;
+          if(!on)break;
+          const renders=homeCount()-validationCount();
+          const renderRoom=renders<cap()&&scopes.size-validationCount()<cap()+adm.recoveryRoom;
+          if(available()-(scopes.size+1)*adm.admitMb<adm.floorMb)break;
           const candidates=[...scopes.values()].some(s=>s.candidate);
-          const w=getState().waiters.filter(eligible).filter(w=>w.homeKind!=='motion-candidate'||!candidates)
+          const w=getState().waiters.filter(eligible).filter(w=>(w.homeKind!=='motion-candidate'||!candidates)&&(renderRoom||w.homeKind==='motion-validation'))
             .sort((a,b)=>a.priority<b.priority?-1:a.priority>b.priority?1:a.seq-b.seq)[0];
           if(!w)break;
           const s={kind:'motion-home',nonce:crypto.randomUUID(),jobId:w.jobId,resourceKey:'frameshift',
@@ -70,12 +115,12 @@ function createQueue({getState,getCapacity,claim,isAborted=()=>false,available=a
     },
     stats(){return {capacity:cap(),active:scopes.size,homeActive:homeCount(),recovering:recovering(),
       queued:getState().waiters.filter(eligible).length,admitted,completed,failed,
-      stagingMb:scopes.size*STAGING_MB,nativeRecovered:q.nativeRecovered||0,validationActive:validationCount(),
+      stagingMb:scopes.size*admission().admitMb,nativeRecovered:q.nativeRecovered||0,validationActive:validationCount(),
       candidates:[...scopes.values()].filter(s=>s.candidate).length,checkedAt:new Date().toISOString()};},
   };
   return q;
 }
-function attachExecution(q,{getContext,runIndependent,runNative,isAborted=()=>false,isMock=()=>true}) {
+function attachExecution(q,{getContext,runIndependent,runNative,isAborted=()=>false,isMock=()=>true,admission=createAdmissionReader()}) {
   const current=()=>getContext()?.leases?.get('render');
   let nativeRunning=0;
   q.ownsCurrent=()=>q.valid(current()?.boosted) && !recovery.getStore();
@@ -84,7 +129,7 @@ function attachExecution(q,{getContext,runIndependent,runNative,isAborted=()=>fa
     if(!q.valid(s)||recovery.getStore())return fn();
     if(s.recovering)throw Error('Concurrent Home Motion native recovery rejected');
     s.recovering=true;s.phase='native-wait';
-    const controller=new AbortController(),signals=[controller.signal,lease.signal,AbortSignal.timeout(1800000 /* vf-custom:motion-recovery-limit-v1, was 900000 */)].filter(Boolean);
+    const controller=new AbortController(),signals=[controller.signal,lease.signal,AbortSignal.timeout(RECOVERY_LIMIT_MS /* vf-custom:motion-recovery-limit-v2, was 900000 then 1800000 */)].filter(Boolean);
     const signal=AbortSignal.any(signals);
     const watch=setInterval(()=>{if(isAborted(s.jobId)||lease.released)controller.abort(Error('Motion scope ended'));},1000);watch.unref?.();
     const check=()=>{
@@ -94,7 +139,7 @@ function attachExecution(q,{getContext,runIndependent,runNative,isAborted=()=>fa
     let acquired=false;
     try {
       check();
-      while(nativeRunning>=MAX_RECOVERING){
+      while(nativeRunning>=admission().maxRecovering){
         await require('node:timers/promises').setTimeout(100,undefined,{signal});check();
       }
       nativeRunning++;acquired=true;s.phase='native';
@@ -140,7 +185,7 @@ function install(deps){
     try{
       const cfg=getSettings(),health=globalThis.__vfHomeCapabilities,route=globalThis.__vfFrameshiftRoute;
       if(queue?.enabled===false||!cfg?.homeMotion||!route||!health?.ready||Date.now()-health.checkedAt>20000)return 0;
-      const limit=Number.isSafeInteger(cfg.motionSlots)&&cfg.motionSlots>=1&&cfg.motionSlots<=8?cfg.motionSlots:2;
+      const limit=Number.isSafeInteger(cfg.motionSlots)&&cfg.motionSlots>=1&&cfg.motionSlots<=MAX_HOME?cfg.motionSlots:2;
       const measured=route.stats?.homeInFlight;
       const occupied=Number.isSafeInteger(measured)&&measured>=0?measured:(route.stats?.active||0);
       const external=Math.max(0,occupied-(queue?.statsHomeCount?.()||0));
@@ -193,4 +238,4 @@ function install(deps){
   };}
   globalThis.__vfHomeMotionQueue=q;tick();return q;
 }
-module.exports={createQueue,attachExecution,renderOnly,install,wrapEstimate,guardRoute,STAGING_MB,FLOOR_MB,DIRECT,OPAQUE};
+module.exports={createQueue,attachExecution,renderOnly,install,wrapEstimate,guardRoute,createAdmissionReader,ADMIT_DEFAULTS,STAGING_MB,FLOOR_MB,DIRECT,OPAQUE};

@@ -27,8 +27,18 @@ function phaseFraction(d) {
   }
 }
 
-function rankKey(jobId, detail, row, { early = false } = {}) {
-  const tier = (early ? EARLY_TIERS : TIERS)[detail?.basis] ?? UNKNOWN_TIER;
+// Short-video lift (2026-11-19, owner: newly queued short videos must not wait behind long
+// ones): while rendering segments, a video with at most shortMax segments ranks like chunk
+// composition, i.e. before every long video that is still rendering segments. Long videos
+// that already compose chunks keep their place. shortMax 0 = off.
+function isShort(detail, shortMax) {
+  return shortMax > 0 && detail?.basis === 'segments' && Number.isFinite(detail.totalSegments)
+    && detail.totalSegments > 0 && detail.totalSegments <= shortMax;
+}
+
+function rankKey(jobId, detail, row, { early = false, shortMax = 0 } = {}) {
+  const tiers = early ? EARLY_TIERS : TIERS;
+  const tier = isShort(detail, shortMax) ? tiers['chunk-composition'] : tiers[detail?.basis] ?? UNKNOWN_TIER;
   const bucket = Math.max(0, Math.min(BUCKETS, Math.floor(phaseFraction(detail) * BUCKETS + 1e-9)));
   const stamp = v => (typeof v === 'string' && v ? v : '~');
   return `${tier}|${String(BUCKETS - bucket).padStart(2, '0')}|${stamp(row?.started_at)}|${stamp(row?.queued_at)}|${jobId}`;
@@ -49,22 +59,29 @@ function createJobPriority({ getJobs, getLanes, progress, getDb, wake = () => {}
     return statement.get(jobId) || null;
   }
 
-  function keyFor(jobId, early = settings().earlyPhasePriority === true) {
+  function shortMaxOf(s) {
+    const n = Number(s?.shortVideoMaxSegments);
+    return s?.shortVideoPriority === true && Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  function keyFor(jobId, early = settings().earlyPhasePriority === true, shortMax = shortMaxOf(settings())) {
     let detail = null, row = null;
     try { detail = progress(jobId); } catch { detail = null; }
     try { row = times(jobId); } catch { row = null; }
-    return rankKey(jobId, detail, row, { early });
+    return rankKey(jobId, detail, row, { early, shortMax });
   }
 
   function tick() {
     try {
       const jobs = getJobs(), lanes = getLanes();
       if (!(jobs instanceof Map) || !(lanes instanceof Map)) return 0;
-      const updates = new Map(), early = settings().earlyPhasePriority === true;
+      const current = settings();
+      const updates = new Map(), early = current.earlyPhasePriority === true, shortMax = shortMaxOf(current);
       stats.early = early;
+      stats.shortMax = shortMax;
       for (const [jobId, job] of jobs) {
         if (!job || typeof job.priority !== 'string' || job.priority === '') continue;
-        const key = keyFor(jobId, early);
+        const key = keyFor(jobId, early, shortMax);
         if (key !== job.priority) updates.set(jobId, { old: job.priority, key });
       }
       stats.ticks++;
@@ -100,4 +117,4 @@ function createJobPriority({ getJobs, getLanes, progress, getDb, wake = () => {}
   return { tick, start, stop, keyFor, stats };
 }
 
-module.exports = { createJobPriority, rankKey, phaseFraction, TIERS, EARLY_TIERS };
+module.exports = { createJobPriority, rankKey, phaseFraction, isShort, TIERS, EARLY_TIERS };

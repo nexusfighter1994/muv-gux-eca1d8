@@ -197,6 +197,19 @@ def fflow():
     except Exception as error:
         note('fflow.fxBudget', False, str(error))
 
+    # Camera-only (zoom/pan) chunks in the single pass (single-pass-camera-install.py, 2026-11-22).
+    # The code is inert until /data/runtime/vf-single-pass-camera.json says {"enabled": true}.
+    composer = CORE / 'composer.py'
+    try:
+        text, crlf = read(composer)
+        patched = runpy.run_path(str(HERE / 'single-pass-camera-install.py'))['patch_composer'](text)
+        if patched != text:
+            ast.parse(patched)
+            write(composer, patched, crlf)
+        note('fflow.singlePassCamera', True)
+    except Exception as error:
+        note('fflow.singlePassCamera', False, str(error))
+
     # Timeouts grow with the media length (ffmpeg_duration_timeout.py).
     text, crlf = read(target)
     timeout_marker = '# vf-custom:ffmpeg-duration-timeout-v1'
@@ -527,12 +540,36 @@ def node():
         if 'node.ffmpegDefaultTimeout' not in previous['report']:
             runpy.run_path(str(HERE / 'ffmpeg-default-timeout-install.py'))['patch_node'](text)
             prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.ffmpegDefaultTimeout': 'ok'}}
+        if 'node.runpodPool' not in previous['report']:
+            runpy.run_path(str(HERE / 'runpod-pool-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.runpodPool': 'ok'}}
+        if 'node.leaderboardCache' not in previous['report']:
+            runpy.run_path(str(HERE / 'leaderboard-cache-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.leaderboardCache': 'ok'}}
+        if 'node.longVideoCap' not in previous['report']:
+            runpy.run_path(str(HERE / 'long-video-cap-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.longVideoCap': 'ok'}}
+        if 'node.podRescue' not in previous['report']:
+            runpy.run_path(str(HERE / 'pod-rescue-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.podRescue': 'ok'}}
+        if 'node.oversizeChunk' not in previous['report']:
+            runpy.run_path(str(HERE / 'oversize-chunk-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.oversizeChunk': 'ok'}}
+        if 'node.podOverflow' not in previous['report']:
+            runpy.run_path(str(HERE / 'pod-overflow-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.podOverflow': 'ok'}}
+        if 'node.authRetry' not in previous['report']:
+            runpy.run_path(str(HERE / 'auth-retry-install.py'))['patch_node'](text)
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'node.authRetry': 'ok'}}
         if 'fflow.fxEncodeWait' not in previous['report']:
             # Python-side hook added 2026-11-09; fflow() installs it, older reports predate it.
             prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'fflow.fxEncodeWait': 'ok'}}
         if 'fflow.fxBudget' not in previous['report']:
             # Python-side hook added 2026-11-10; fflow() installs it, older reports predate it.
             prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'fflow.fxBudget': 'ok'}}
+        if 'fflow.singlePassCamera' not in previous['report']:
+            # Python-side hook added 2026-11-22; fflow() installs it, older reports predate it.
+            prior_contract = {**prior_contract, 'report': {**prior_contract['report'], 'fflow.singlePassCamera': 'ok'}}
         HOOK_GATE['validate_hook_report'](prior_contract)
     if target.exists():
         shutil.rmtree(target)
@@ -585,6 +622,20 @@ def node():
         note('node.sfxCloseOnce', True)
         text = runpy.run_path(str(HERE / 'ffmpeg-default-timeout-install.py'))['patch_node'](text)
         note('node.ffmpegDefaultTimeout', True)
+        text = runpy.run_path(str(HERE / 'runpod-pool-install.py'))['patch_node'](text)
+        note('node.runpodPool', True)
+        text = runpy.run_path(str(HERE / 'leaderboard-cache-install.py'))['patch_node'](text)
+        note('node.leaderboardCache', True)
+        text = runpy.run_path(str(HERE / 'long-video-cap-install.py'))['patch_node'](text)
+        note('node.longVideoCap', True)
+        text = runpy.run_path(str(HERE / 'auth-retry-install.py'))['patch_node'](text)
+        note('node.authRetry', True)
+        text = runpy.run_path(str(HERE / 'pod-rescue-install.py'))['patch_node'](text)
+        note('node.podRescue', True)
+        text = runpy.run_path(str(HERE / 'oversize-chunk-install.py'))['patch_node'](text)
+        note('node.oversizeChunk', True)
+        text = runpy.run_path(str(HERE / 'pod-overflow-install.py'))['patch_node'](text)
+        note('node.podOverflow', True)
         write(bundle, text, crlf)
         note('node.bundle', True, 'already patched')
         (target / 'hooks-build.json').write_text(json.dumps({
@@ -807,6 +858,20 @@ def node():
     note('node.sfxCloseOnce', True)
     text = runpy.run_path(str(HERE / 'ffmpeg-default-timeout-install.py'))['patch_node'](text)
     note('node.ffmpegDefaultTimeout', True)
+    text = runpy.run_path(str(HERE / 'runpod-pool-install.py'))['patch_node'](text)
+    note('node.runpodPool', True)
+    text = runpy.run_path(str(HERE / 'leaderboard-cache-install.py'))['patch_node'](text)
+    note('node.leaderboardCache', True)
+    text = runpy.run_path(str(HERE / 'long-video-cap-install.py'))['patch_node'](text)
+    note('node.longVideoCap', True)
+    text = runpy.run_path(str(HERE / 'auth-retry-install.py'))['patch_node'](text)
+    note('node.authRetry', True)
+    text = runpy.run_path(str(HERE / 'pod-rescue-install.py'))['patch_node'](text)
+    note('node.podRescue', True)
+    text = runpy.run_path(str(HERE / 'oversize-chunk-install.py'))['patch_node'](text)
+    note('node.oversizeChunk', True)
+    text = runpy.run_path(str(HERE / 'pod-overflow-install.py'))['patch_node'](text)
+    note('node.podOverflow', True)
     write(bundle, text, crlf)
     (target / 'hooks-build.json').write_text(json.dumps({'fingerprints': {**found, 'app': app, 'owner': owner, 'db': db}, 'report': report}, indent=1))
 

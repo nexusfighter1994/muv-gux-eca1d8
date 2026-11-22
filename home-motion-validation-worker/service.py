@@ -64,16 +64,27 @@ def run_owned(command,root,timeout,disconnected=lambda:False):
 
 class CleanupError(RuntimeError): pass
 
+# 2026-11-21: slot count from VF_VALIDATION_SLOTS or validation-slots.json next to this file ({"slots": n}), 1-8,
+# default 2. The server accepts any reported capacity 1-8 and admits that many validations.
+def validation_slots():
+    raw=os.environ.get('VF_VALIDATION_SLOTS','')
+    if not raw:
+        try: raw=json.loads((Path(__file__).resolve().parent/'validation-slots.json').read_text(encoding='utf8')).get('slots','')
+        except Exception: raw=''
+    try: n=int(raw)
+    except Exception: n=2
+    return n if 1<=n<=8 else 2
+
 class State:
     def __init__(self,token,config_path):
         self.token=token;self.config_path=config_path
         self.config=json.loads(config_path.read_text(encoding='utf8'))
         for name,expected in self.config['files'].items():
             if hashlib.sha256(Path(name).read_bytes()).hexdigest()!=expected: raise RuntimeError('Pinned native runtime changed')
-        self.lock=threading.Lock();self.slots=threading.BoundedSemaphore(2)
+        self.lock=threading.Lock();self.capacity=validation_slots();self.slots=threading.BoundedSemaphore(self.capacity)
         self.active=self.completed=self.rejected=self.failed=self.quarantined=0
     def snapshot(self):
-        with self.lock: return dict(ready=not self.quarantined,contract=CONTRACT,capacity=2,active=self.active,completed=self.completed,rejected=self.rejected,failed=self.failed,quarantined=self.quarantined,backend='native-hyperframes-cpu-browser')
+        with self.lock: return dict(ready=not self.quarantined,contract=CONTRACT,capacity=self.capacity,active=self.active,completed=self.completed,rejected=self.rejected,failed=self.failed,quarantined=self.quarantined,backend='native-hyperframes-cpu-browser')
 
 class Handler(BaseHTTPRequestHandler):
     def setup(self): super().setup();self.connection.settimeout(20)

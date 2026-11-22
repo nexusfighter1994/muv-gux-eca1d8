@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import {KIND, MAX_RESPONSE, MAX_OUTPUT, MAX_ARTIFACT, validate, verify, hash, payloadSha256, decodeBase64} from './alpha-worker.mjs';
 import remoteActive from '../remote-active.cjs';
+import {sendWithBusyRetry} from './busy-retry.mjs';
 
 // An unconfirmed remote cancel pauses Home offers for a while only (Home's single slot
 // rejects new work while an abandoned job could still run).
@@ -93,7 +94,7 @@ export function createAlphaHook(nativeRender, {endpoint, token, contract, permit
     const abort = () => controller.abort(signal.reason);
     signal?.addEventListener('abort', abort, {once: true});
     if (signal?.aborted) abort();
-    const id = crypto.randomBytes(16).toString('hex');
+    let id = crypto.randomBytes(16).toString('hex');
     const headers = {Authorization: 'Bearer ' + token, 'Content-Type': 'application/json'};
     const part = options.targetPath + '.alpha-' + id + '.part';
     let possibleRemote = false, endRemote = null;
@@ -119,15 +120,22 @@ export function createAlphaHook(nativeRender, {endpoint, token, contract, permit
       controller.signal.throwIfAborted();
       const remaining = Math.floor(homeDeadline - Date.now());
       if (remaining < 1) throw Error('remote deadline exhausted');
-      const p = validate({version: 1, id, contract, kind: KIND, format: options.format,
+      const payloadFor = jobId => validate({version: 1, id: jobId, contract, kind: KIND, format: options.format,
         compositionHtml: options.compositionHtml, renderOnlyHtml: options.renderOnlyHtml ?? '', assets,
         fps: options.fps, resolution: options.resolution, workers: options.workers ?? 1, sourceWorkers: options.workers ?? 1,
-        quality: options.quality ?? 'standard', duration, timeoutMs: remaining}, contract);
+        quality: options.quality ?? 'standard', duration, timeoutMs: Math.max(1, Math.floor(homeDeadline - Date.now()))}, contract);
       possibleRemote = true;
       endRemote = remoteActive.begin('frameshift');
-      const response = await fetchImpl(new URL('/motion/render', base), {
-        method: 'POST', headers, body: JSON.stringify(p), signal: controller.signal,
-      });
+      // vf-custom:motion-busy-retry-v1: an instant 503 means Home has no free worker slot right now; ask again (new id)
+      // instead of falling back to the server at once. `id` always names the attempt in flight, for the cancel below.
+      const sent = await sendWithBusyRetry({firstId: id, homeDeadline, signal: controller.signal, send: async jobId => {
+        id = jobId;
+        const body = payloadFor(jobId);
+        return {payload: body, response: await fetchImpl(new URL('/motion/render', base), {
+          method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal,
+        })};
+      }});
+      const p = sent.payload, response = sent.response;
       // Home has rendered: receiving and verifying its result may use the whole budget
       // (a loaded server took >50 s here and discarded finished GPU work). The native
       // fallback keeps its own fresh budget, so this never shortens a server render.

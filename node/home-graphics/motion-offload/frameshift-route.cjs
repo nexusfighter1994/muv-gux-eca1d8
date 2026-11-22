@@ -8,8 +8,9 @@
 const { AsyncLocalStorage } = require('node:async_hooks');
 
 const bypass = new AsyncLocalStorage();
-// Upper bound of parallel Home renders (the Home graphics gate has this many slots).
-const MAX_SLOTS = 8;
+// Upper bound of parallel Home renders (the Home graphics gate has 14 slots since 2026-11-05).
+// 2026-11-17 owner: "erhoehe dann wenigstens auf 9" -> bound 8 -> 14; the live value is motionSlots.
+const MAX_SLOTS = 14;
 // Probe admission cool-down: this many offers in a row ending on the server pause the probe.
 const PROBE_MISSES = 3, PROBE_COOLDOWN_MS = 60000;
 // Only Home failures and ineligible offers count; busy/disabled/scope refusals say nothing about Home.

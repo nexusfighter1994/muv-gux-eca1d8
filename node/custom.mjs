@@ -31,6 +31,20 @@ import homeRemote from './home-graphics/remote-active.cjs';
 import homeMotionDispatch from './home-motion-dispatch.cjs';
 import homeMotionValidation from './home-motion-validation.cjs';
 import runpodBurst from './runpod/burst-controller.cjs';
+import runpodPool from './runpod-pool.cjs';
+import longVideoCap from './long-video-cap.cjs';
+import authRetry from './auth-retry.cjs';
+import podRescue from './pod-rescue.cjs';
+import oversizeChunk from './oversize-chunk.cjs';
+import podOverflow from './pod-overflow.cjs';
+
+// 2026-11-18: short videos starved behind long ones hit the stock chunkRender step deadline (max(2 h, 15 min per
+// chunk), computed once at step start) and failed ("21 chunk(s) did not settle within 405 min ... queued behind
+// other videos"), burning auto-retries. Generous deadline (owner: raise timeouts, not lower parallelism); real
+// hangs are still caught by the separate stall timer (VIDFORGE_CHUNK_RENDER_STALL_MS, >= 5 h without progress).
+if (process.env.VIDFORGE_CHUNK_RENDER_TIMEOUT_MS == null || String(process.env.VIDFORGE_CHUNK_RENDER_TIMEOUT_MS).trim() === '') {
+  process.env.VIDFORGE_CHUNK_RENDER_TIMEOUT_MS = String(96 * 3600e3);
+}
 import jobPriority from './job-priority.cjs';
 import fflowResubmit from './fflow-resubmit.cjs';
 import fflowSubmitDeadline from './fflow-submit-deadline.cjs';
@@ -125,6 +139,92 @@ export function installRunpodBurst() {
   return (globalThis.__vfBurst = runpodBurst.createDefaultBurst({ here: path.join(HERE, 'runpod') }).start());
 }
 // Finish-first: the further a running video is, the higher its native priority (same switch as finish-first RAM fairness).
+// Native RunPod GPU-FFmpeg pool: REST v2, NVENC self-test fix, bounded waiting, queue-driven on/off
+// (runpod-pool-install.py, 2026-11-16). Hot knob /data/runtime/vf-runpod-pool.json.
+export function installRunpodPool(native) {
+  if (globalThis.__vfRunpodPool) return globalThis.__vfRunpodPool;
+  const pool = runpodPool.createRunpodPool(native);
+  pool.start();
+  return (globalThis.__vfRunpodPool = pool);
+}
+// Long-video cap (long-video-cap-install.py, 2026-11-18): at most N long videos run at once, short ones keep the
+// free slots. The queue db handle may not exist yet when the tail hook runs, so poll until it does.
+export function installLongVideoCap(native) {
+  if (globalThis.__vfLongVideoCap) return globalThis.__vfLongVideoCap;
+  const start = () => {
+    const db = typeof native.db === 'function' ? native.db() : native.db;
+    if (!db || typeof db.prepare !== 'function') return false;
+    const cap = longVideoCap.createLongVideoCap({ db, dispatch: native.dispatch });
+    cap.start();
+    globalThis.__vfLongVideoCap = cap;
+    return true;
+  };
+  let ok = false;
+  try { ok = start(); } catch { ok = false; }
+  if (!ok) {
+    const timer = setInterval(() => { try { if (start()) clearInterval(timer); } catch { /* db not ready */ } }, 1000);
+    timer.unref?.();
+  }
+  return globalThis.__vfLongVideoCap || null;
+}
+// Pod rescue (pod-rescue-install.py, 2026-11-21): animations queued on the local render lane stay open to free
+// RunPod pod slots; Home Motion native recoveries too. The scheduler and pool may not exist yet when the tail hook
+// runs, so poll until they do. Hot knob /data/runtime/vf-pod-rescue.json.
+export function installPodRescue(deps) {
+  if (globalThis.__vfPodRescue) return globalThis.__vfPodRescue;
+  const start = () => {
+    if (!deps.ready()) return false;
+    podRescue.install({ native: deps.native, od: deps.od, scheduler: deps.scheduler() });
+    return true;
+  };
+  let ok = false;
+  try { ok = start(); } catch { ok = false; }
+  if (!ok) {
+    const timer = setInterval(() => { try { if (start()) clearInterval(timer); } catch { /* not ready */ } }, 1000);
+    timer.unref?.();
+  }
+  return globalThis.__vfPodRescue || null;
+}
+// Oversize chunk split (oversize-chunk-install.py, 2026-11-22): a chunk with more clips than FFlow accepts (HTTP 422
+// above 100 segment entries; 43a0317f chunk 185 had 216) is composed in parts and joined. Chunks up to `splitAbove`
+// clips, test renders and any error while deciding keep the native renderer. Knob /data/runtime/vf-oversize-chunk.json.
+export function wrapOversizeChunk(original, native = {}) {
+  if (typeof original !== 'function' || original.__vfOversizeChunk) return original;
+  const split = oversizeChunk.createOversizeChunk({ ...native, log: msg => console.log(`[vf-oversize-chunk] ${msg}`) });
+  const wrapped = async function vfOversizeChunkRender(args) {
+    let big = false;
+    try { big = split.shouldSplit(args); } catch { big = false; }
+    return big ? split.render(args) : original(args);
+  };
+  wrapped.__vfOversizeChunk = true;
+  globalThis.__vfOversizeChunk = { stats: split.stats, orig: original, version: 1 };
+  return wrapped;
+}
+// Pod overflow (pod-overflow-install.py, 2026-11-22): with the pool on every b-roll trim waited for a pod slot and the
+// Home PC got none (34 instead of 357 trims per 10 min). The pod keeps first call; a trim takes the local lane (Home
+// claims it there) only while all pod slots are busy and a backlog waits. Knob /data/runtime/vf-pod-overflow.json.
+export function wrapPodOverflow(original, native = {}) {
+  if (typeof original !== 'function' || original.__vfPodOverflow) return original;
+  const ov = podOverflow.createPodOverflow({ ...native, homeStats: () => globalThis.__vfHomeQueue?.stats?.() });
+  const wrapped = function vfPodOverflowDxe(e, t, r, o) {
+    let local = false;
+    try { local = ov.shouldRunLocal({ jobId: e, operation: t, workload: o?.workload }); } catch { local = false; }
+    return local ? ov.runLocal(r) : original(e, t, r, o);
+  };
+  wrapped.__vfPodOverflow = true;
+  globalThis.__vfPodOverflow = { stats: ov.stats, orig: original, version: 1 };
+  return wrapped;
+}
+// Render-authorization retry (auth-retry-install.py, 2026-11-20): a segment waits and is dispatched again when the
+// app's render authorization is temporarily unavailable, instead of staying "rendering" with nothing queued until
+// the whole chunkRender step has ended. Any failure here keeps the native dispatcher.
+export function wrapDispatchAuthRetry(original, native = {}) {
+  if (typeof original !== 'function' || original.__vfAuthRetry) return original;
+  const wrapped = authRetry.wrapDispatch(original, { isAborted: typeof native.isAborted === 'function' ? native.isAborted : undefined });
+  globalThis.__vfAuthRetry = { stats: wrapped.stats, version: authRetry.VERSION };
+  return wrapped;
+}
+
 export function installJobPriority(native) {
   if (!modEnabled('mapAdmission') || globalThis.__vfJobPriority) return globalThis.__vfJobPriority || null;
   const manager = jobPriority.createJobPriority(native);

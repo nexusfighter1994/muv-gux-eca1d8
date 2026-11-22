@@ -40,12 +40,19 @@ async function prepare(p,signal){
   }
   return {...p,assets,contract:CONTRACT,realAssets:!['0','false','no','off'].includes(String(process.env.VIDFORGE_FRAMESHIFT_VALIDATE_REAL_ASSETS||'').trim().toLowerCase())};
 }
+// 2026-11-21 10:55Z (owner 21.11.: "Ja erhoehen deine Empfehlung machen go!"): Home validation was fixed at 2 slots
+// while 1075 validations waited (oldest 26 h) and the server lane was RAM-blocked. The Home worker reports its slot
+// count (VF_VALIDATION_SLOTS / validation-slots.json, 1-8); any reported capacity 1-8 is accepted and the
+// dispatcher admits that many validations.
+const MAX_CAPACITY=8;
+const capacityOf=h=>Number.isInteger(h?.capacity)&&h.capacity>=1&&h.capacity<=MAX_CAPACITY?h.capacity:0;
 function create({queue,send,enabled,getSignal=()=>undefined,isAborted=()=>false,now=Date.now}){
   const stats={active:0,completed:0,rejected:0,fallback:0,last:null};let health=null,healthAt=0;
   const handle={
-    setHealth(h){health=h;healthAt=h?.ready===true&&h.contract===CONTRACT&&h.capacity===2?now():0;},
+    setHealth(h){health=h;healthAt=h?.ready===true&&h.contract===CONTRACT&&capacityOf(h)?now():0;},
+    capacity(){return capacityOf(health)||2;},
     ready(){return enabled()&&healthAt>0&&now()-healthAt<12000;},
-    snapshot(){return {...stats,ready:handle.ready(),capacity:2,health,healthAt};},
+    snapshot(){return {...stats,ready:handle.ready(),capacity:handle.capacity(),health,healthAt};},
     async run(native,p,context={}){
       if(!queue.ownsCurrent())return native();
       const caller=context.signal||getSignal(),controller=new AbortController();
@@ -95,4 +102,4 @@ function start({queue,enabled,isAborted}){
   }
   return handle;
 }
-module.exports={CONTRACT,CALLBACKS,isCallback,validateResult,supported,prepare,create,start};
+module.exports={CONTRACT,CALLBACKS,MAX_CAPACITY,capacityOf,isCallback,validateResult,supported,prepare,create,start};

@@ -136,9 +136,9 @@ test('settings file: default on, explicit off, bounded floor, cached for 1 s', (
   let at = 0, body = null, reads = 0;
   const read = () => { reads++; if (body === null) throw Error('missing'); return body; };
   const settings = createSettingsReader({ now: () => at, read });
-  assert.deepEqual(settings(), { enabled: true, floorMb: 12288, recentMs: 20000, pendingShare: 1 });
+  assert.deepEqual(settings(), { enabled: true, floorMb: 12288, recentMs: 20000, pendingShare: 1, renderLiveHeadroom: false, renderHoldMs: 15000 });
   body = '{"enabled":false}'; assert.equal(settings().enabled, true);
-  at = 1000; assert.deepEqual(settings(), { enabled: false, floorMb: 12288, recentMs: 20000, pendingShare: 1 });
+  at = 1000; assert.deepEqual(settings(), { enabled: false, floorMb: 12288, recentMs: 20000, pendingShare: 1, renderLiveHeadroom: false, renderHoldMs: 15000 });
   body = '{"floorMb":1000}'; at = 2000; assert.equal(settings().floorMb, 12288);
   body = '{"floorMb":16384}'; at = 3000; assert.equal(settings().floorMb, 16384);
   assert.equal(reads, 4);
@@ -201,4 +201,71 @@ test('recent overrides still bound a burst when pendingShare is low', async () =
   for (let i = 0; i < 8; i++) results.push((await wrapped(req)).allowed);
   // 30000 - 3383 - 3383k >= 8192 for k <= 5
   assert.deepEqual(results, [true, true, true, true, true, true, false, false]);
+});
+
+test('v6: render live_headroom refusal is admitted only with renderLiveHeadroom and real headroom', async () => {
+  const live = { reasonKey: 'live_headroom', laneKey: 'render', predictedSlotMb: 2689, availableMb: 17000, pendingMb: 13900, reserveMb: 2048 };
+  const renderReq = { key: 'frameshift', lane: 'render', jobId: 'j' };
+  const flagOn = () => ({ enabled: true, floorMb: 8192, pendingShare: 0.25, renderLiveHeadroom: true });
+  const flagOff = () => ({ enabled: true, floorMb: 8192, pendingShare: 0.25, renderLiveHeadroom: false });
+  // 17000 - 2689 - 13900*0.25 = 10836 >= 8192
+  const a = gate({ allowed: false, wait: live }, { available: () => 17000, settings: flagOn });
+  assert.deepEqual(await a.wrapped(renderReq), { allowed: true });
+  assert.equal(a.wrapped.headroomStats().renderLiveOverrides, 1);
+  const b = gate({ allowed: false, wait: live }, { available: () => 17000, settings: flagOff });
+  assert.equal((await b.wrapped(renderReq)).allowed, false);
+  const c = gate({ allowed: false, wait: { ...live, laneKey: 'ffmpeg' } }, { available: () => 17000, settings: flagOn });
+  assert.equal((await c.wrapped({ key: 'ffmpeg', lane: 'ffmpeg', jobId: 'j' })).allowed, false);
+  const d = gate({ allowed: false, wait: live }, { available: () => 12000, settings: flagOn });
+  assert.equal((await d.wrapped(renderReq)).allowed, false);   // 12000 - 2689 - 3475 = 5836 < 8192
+});
+test('v6: settings reader exposes renderLiveHeadroom only when true', () => {
+  assert.equal(createSettingsReader({ read: () => JSON.stringify({ renderLiveHeadroom: true }) })().renderLiveHeadroom, true);
+  assert.equal(createSettingsReader({ read: () => JSON.stringify({ renderLiveHeadroom: 'yes' }) })().renderLiveHeadroom, false);
+});
+test('v7: renderHoldMs keeps a refused render slot reserved across the render retry gap', async () => {
+  let at = 1000, free = 14000;
+  const hold = ms => () => ({ enabled: true, floorMb: 10240, pendingShare: 0.25, renderHoldMs: ms });
+  const mk = ms => createRealHeadroomGate(async () => refuse({ availableMb: free, pendingMb: 0, predictedSlotMb: 3872 }),
+    { now: () => at, available: () => free, settings: hold(ms) });
+  for (const [ms, expected] of [[undefined, true], [60000, false]]) {
+    at = 1000; free = 14000;
+    const g = mk(ms);
+    assert.equal((await g({ lane: 'render', key: 'frameshift' })).allowed, false);   // 14000-3872 < 10240
+    at += 30000; free = 14500;   // render retries only every ~36 s; ffmpeg (2236) asks in between
+    assert.equal((await g({ lane: 'ffmpeg', key: 'ffmpeg' })).allowed, expected, `hold ${ms}`);
+  }
+  assert.equal(createSettingsReader({ read: () => '{"renderHoldMs":60000}' })().renderHoldMs, 60000);
+  assert.equal(createSettingsReader({ read: () => '{"renderHoldMs":999999}' })().renderHoldMs, 15000);
+  assert.equal(createSettingsReader({ read: () => '{"renderHoldMs":1000}' })().renderHoldMs, 15000);
+});
+test('v8: renderFloorMb lowers the floor for render slots only', async () => {
+  const cfg = rf => () => ({ enabled: true, floorMb: 10240, pendingShare: 0.25, ...(rf ? { renderFloorMb: rf } : {}) });
+  const live = { predictedSlotMb: 3872, availableMb: 13500, pendingMb: 5000, reserveMb: 2048 };
+  const render = { lane: 'render', key: 'frameshift' }, ffmpeg = { lane: 'ffmpeg', key: 'ffmpeg' };
+  // 13500 - 3872 - 5000*0.25 = 8378: below 10240, above 7168
+  assert.equal((await gate(refuse(live), { available: () => 13500, settings: cfg() }).wrapped(render)).allowed, false);
+  assert.equal((await gate(refuse(live), { available: () => 13500, settings: cfg(7168) }).wrapped(render)).allowed, true);
+  // ffmpeg keeps floorMb: 13500 - 2236 - 1250 = 10014 < 10240
+  assert.equal((await gate(refuse({ ...live, predictedSlotMb: 2236 }), { available: () => 13500, settings: cfg(7168) }).wrapped(ffmpeg)).allowed, false);
+  // real free RAM still decides
+  assert.equal((await gate(refuse(live), { available: () => 11000, settings: cfg(7168) }).wrapped(render)).allowed, false);
+  assert.equal(createSettingsReader({ read: () => '{"renderFloorMb":7168}' })().renderFloorMb, 7168);
+  assert.equal('renderFloorMb' in createSettingsReader({ read: () => '{"renderFloorMb":1000}' })(), false);
+});
+test('v9: hardFloorMb vetoes native grants while real free RAM is below it; off by default', async () => {
+  const hard = hf => () => ({ enabled: true, floorMb: 12288, ...(hf ? { hardFloorMb: hf } : {}) });
+  const reqC = { key: 'fflowComposition', lane: 'ffmpeg', jobId: 'j' };
+  // native says yes, 6 GB really free, hard floor 8 GB -> refused with a wait object the scheduler can show
+  const a = gate(true, { available: () => 6000, settings: hard(8192) });
+  const r = await a.wrapped(reqC);
+  assert.equal(r.allowed, false); assert.equal(r.wait.reasonKey, 'app_budget'); assert.equal(r.wait.availableMb, 6000);
+  assert.equal(a.wrapped.headroomStats().hardKept, 1);
+  // enough free RAM, or no hard floor: native grant passes
+  assert.equal(await gate(true, { available: () => 9000, settings: hard(8192) }).wrapped(reqC), true);
+  assert.deepEqual(await gate({ allowed: true }, { available: () => 500, settings: hard(0) }).wrapped(reqC), { allowed: true });
+  // unreadable meminfo never blocks
+  assert.equal(await gate(true, { available: () => NaN, settings: hard(8192) }).wrapped(reqC), true);
+  assert.equal(createSettingsReader({ read: () => '{"hardFloorMb":8192}' })().hardFloorMb, 8192);
+  assert.equal('hardFloorMb' in createSettingsReader({ read: () => '{"hardFloorMb":100}' })(), false);
 });

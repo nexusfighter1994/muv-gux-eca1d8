@@ -61,4 +61,7 @@ test('health contract and freshness are required',()=>{
   assert.equal(f.handle.ready(),false);
   f.handle.setHealth({ready:true,contract:m.CONTRACT,capacity:2,active:0});assert.equal(f.handle.ready(),true);
   f.handle.setHealth({ready:true,contract:'wrong',capacity:2});assert.equal(f.handle.ready(),false);
+  f.handle.setHealth({ready:true,contract:m.CONTRACT,capacity:4});assert.equal(f.handle.ready(),true);assert.equal(f.handle.capacity(),4);
+  assert.equal(f.handle.snapshot().capacity,4);
+  f.handle.setHealth({ready:true,contract:m.CONTRACT,capacity:9});assert.equal(f.handle.ready(),false);assert.equal(f.handle.capacity(),2);
 });

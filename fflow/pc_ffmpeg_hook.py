@@ -51,6 +51,28 @@ def note_decline(reason, now=None):
 
 
 PREPARE_EFFICIENCY_VERSION = 1
+# vf-custom:offload-timing-v1 (2026-11-21): one JSON line per Home offload with the seconds each phase took
+# (prepare/hash, health, blob check, wait for a big-transfer slot, input upload, submit, Home render, result
+# download, local verify). A Home composition took ~300 s end to end while its ffmpeg ran ~35 s on Home and
+# nothing recorded where the rest went. Off: /data/runtime/pc-boost.json {"offloadTiming": false}.
+TIMING_FILE = '/data/runtime/vf-home-offload-timing.jsonl'
+TIMING_CAP = 20 * 1024 * 1024
+
+
+def write_timing(entry, file=None):
+    try:
+        path = Path(file or os.environ.get('VF_HOME_TIMING', TIMING_FILE))
+        try:
+            if path.stat().st_size > TIMING_CAP:
+                os.replace(path, str(path) + '.1')
+        except OSError:
+            pass
+        with open(path, 'a', encoding='utf-8') as stream:
+            stream.write(json.dumps(entry, separators=(',', ':')) + '\n')
+    except Exception:
+        pass
+
+
 _image_fastpath_logged = False
 # The home link carries ~40 Mbit/s downstream. Missing input bytes up to MAX_TRANSFER go at
 # once ("small lane"); larger transfers (up to the protocol's MAX_TOTAL) need one of
@@ -341,13 +363,21 @@ async def submit_render(url, token, payload, *, wait_s=None):
         delay = min(2.0, delay * 1.5)
 
 
-def upload_with_lane(url, token, files, sources):
+def upload_with_lane(url, token, files, sources, stats=None):
     """Small transfers go at once; big ones hold a slot for exactly the upload's duration
     (released in this thread, so an abandoned offload cannot leak extra parallel uploads)."""
+    stats = {} if stats is None else stats
+    started = time.monotonic()
     missing = missing_blobs(url, token, files)
+    stats['check'] = round(time.monotonic() - started, 2)
+    stats['missing'] = sum(reference['size'] for reference in missing.values())
     if sum(reference['size'] for reference in missing.values()) <= MAX_TRANSFER:
+        started = time.monotonic()
         upload_blobs(url, token, missing, sources)
+        stats['upload'] = round(time.monotonic() - started, 2)
         return
+    stats['big'] = True
+    started = time.monotonic()
     slot = acquire_big_slot()
     try:
         from .pc_home_queue import HOME_SCOPE
@@ -363,13 +393,16 @@ def upload_with_lane(url, token, files, sources):
         while slot is None and time.monotonic() < deadline:
             time.sleep(.1)
             slot = acquire_big_slot()
+    stats['slotWait'] = round(time.monotonic() - started, 2)
     if slot is None:
         raise NoBigSlot()
     try:
         # Another render may have uploaded these inputs while this owner waited.
+        started = time.monotonic()
         missing = missing_blobs(url, token, files)
         if missing:
             upload_blobs(url, token, missing, sources)
+        stats['upload'] = round(time.monotonic() - started, 2)
     finally:
         slot.close()
 
@@ -618,21 +651,24 @@ def poll_delay(polls):
     return min(1.0, .2 * 1.5 ** polls)
 
 
-async def download_with_retry(url, token, identifier, result, output, ffmpeg, expected_duration, attempts=None):
+async def download_with_retry(url, token, identifier, result, output, ffmpeg, expected_duration, attempts=None, stats=None):
     attempts = DOWNLOAD_ATTEMPTS if attempts is None else attempts
+    extra = {} if stats is None else {'stats': stats}
     for attempt in range(attempts):
         try:
-            return await download_and_publish(url, token, identifier, result, output, ffmpeg, expected_duration)
+            return await download_and_publish(url, token, identifier, result, output, ffmpeg, expected_duration, **extra)
         except (ValueError, *TRANSIENT_ERRORS) as exc:
             # 404: the Home job is gone (its reaper removed it), a retry cannot succeed.
             retryable = (not isinstance(exc, ValueError) or str(exc) in RETRYABLE_DOWNLOAD) and not gone(exc)
             if attempt + 1 >= attempts or not retryable or not home_scoped():
                 raise
+            if stats is not None:
+                stats['downloadRetries'] = stats.get('downloadRetries', 0) + 1
             note_decline('retried download: ' + (str(exc)[:50] or type(exc).__name__))
             await asyncio.sleep(1 + attempt)
 
 
-async def download_and_publish(url, token, identifier, result, output, ffmpeg, expected_duration):
+async def download_and_publish(url, token, identifier, result, output, ffmpeg, expected_duration, stats=None):
     if result.get('suffix') != output.suffix or not 32 < result.get('size', 0) <= MAX_OUTPUT:
         raise ValueError('Invalid output metadata')
     descriptor, temporary = tempfile.mkstemp(prefix='.pc-boost-', suffix=output.suffix, dir=output.parent)
@@ -663,9 +699,16 @@ async def download_and_publish(url, token, identifier, result, output, ffmpeg, e
             raise ValueError('Output transfer integrity failed')
     threading.Thread(target=keep_alive, args=(url, token, identifier, stop, KEEPALIVE_S), daemon=True).start()
     task = asyncio.create_task(asyncio.to_thread(download))
+    started = time.monotonic()
     try:
         await asyncio.shield(task)
+        if stats is not None:
+            stats['download'] = round(stats.get('download', 0) + time.monotonic() - started, 2)
+            stats['out'] = result.get('size')
+            started = time.monotonic()
         await publish_file(temporary, output, ffmpeg, expected_duration)
+        if stats is not None:
+            stats['verify'] = round(time.monotonic() - started, 2)
     finally:
         stop.set()
         await asyncio.gather(task, return_exceptions=True)
@@ -695,11 +738,17 @@ async def try_offload(command, timeout=None, expected_duration=None, cancellatio
     url = url or os.environ.get('VF_PC_BOOST_FFMPEG_URL', 'http://10.0.3.1:18191')
     roots = roots or [Path(p) for p in os.environ.get('VF_PC_BOOST_MEDIA_ROOTS', '/data/engines/fflow/media:/data/engines/fflow/tmp').split(os.pathsep)]
     identifier, cancel_task = None, None
+    stats, began = None, time.monotonic()
     try:
         try:
             payload, output, sources = await asyncio.to_thread(prepare_request, command, roots)
         except ValueError as exc:
             return note_decline('prepare: ' + str(exc)[:80])
+        if settings.get('offloadTiming') is not False and output.suffix.lower() not in IMAGE_SUFFIXES:
+            stats = {'t': round(time.time()), 'scoped': home_scoped(), 'inputs': len(payload['files']),
+                     'in': sum(reference['size'] for reference in payload['files'].values()),
+                     'fc': '-filter_complex' in payload['argv'], 'prepare': round(time.monotonic() - began, 2),
+                     'result': 'declined'}
         # Single-frame stills (scene thumbnails) take well under a second natively, but >= 5
         # tunnel round trips on the PC (1-3 s each) while the FFlow slot stays held - measured
         # 7.2 s per thumbnail and scene jobs ~2x slower. Only offload real encodes.
@@ -710,7 +759,11 @@ async def try_offload(command, timeout=None, expected_duration=None, cancellatio
             return note_decline('big transfer disabled')
         if token is None:
             token = Path(os.environ.get('VF_PC_BOOST_TOKEN_FILE', '/data/runtime/pc-boost-token')).read_text().strip()
+        mark = time.monotonic()
         health = await home_health(url, token)
+        if stats is not None:
+            stats['health'] = round(time.monotonic() - mark, 2)
+            stats['homeCpu'], stats['homeGpu'] = health.get('cpuBusy'), health.get('gpuBusy')
         if not health.get('ready') or not health.get('config', {}).get('enabled'):
             return note_decline('home not ready or disabled')
         if '@credit.txt' in payload['files'] and (health.get('protocolVersion', 1) < 2
@@ -731,15 +784,25 @@ async def try_offload(command, timeout=None, expected_duration=None, cancellatio
         async def execute_remote():
             nonlocal identifier
             payload['timeout'] = min(360, max(1, float(timeout or 360)))
+            mark = time.monotonic()
             if health.get('protocolVersion', 1) >= 2:
-                await asyncio.to_thread(upload_with_lane, url, token, payload['files'], sources)
+                if stats is None:
+                    await asyncio.to_thread(upload_with_lane, url, token, payload['files'], sources)
+                else:
+                    await asyncio.to_thread(upload_with_lane, url, token, payload['files'], sources, stats)
             elif total > MAX_TRANSFER:
                 raise NoBigSlot()  # protocol v1 inlines base64; never push big inputs that way
             else:
                 for name, path in sources.items():
                     payload['files'][name] = base64.b64encode(path.read_bytes()).decode('ascii')
+            if stats is not None:
+                stats['transferIn'] = round(time.monotonic() - mark, 2)
+                mark = time.monotonic()
             submitted = await submit_render(url, token, payload)
             identifier = submitted['id']
+            if stats is not None:
+                stats['submit'] = round(time.monotonic() - mark, 2)
+                mark = time.monotonic()
             polls = failures = 0
             while True:
                 metadata = health.get('protocolVersion', 1) >= 2
@@ -753,7 +816,12 @@ async def try_offload(command, timeout=None, expected_duration=None, cancellatio
                     await asyncio.sleep(min(5.0, .5 * failures))
                     continue
                 if result['state'] == 'done':
-                    if metadata:
+                    if stats is not None:
+                        stats['render'] = round(time.monotonic() - mark, 2)
+                        stats['lane'] = result.get('lane', 'cpu')
+                    if metadata and stats is not None:
+                        await download_with_retry(url, token, identifier, result, output, command[0], expected_duration, stats=stats)
+                    elif metadata:
                         await download_with_retry(url, token, identifier, result, output, command[0], expected_duration)
                     else:
                         await publish_output(result, output, command[0], expected_duration)
@@ -781,6 +849,8 @@ async def try_offload(command, timeout=None, expected_duration=None, cancellatio
             except ImportError:
                 from pc_home_queue import note_remote_success
             note_remote_success()
+            if stats is not None:
+                stats['result'] = 'ok'
             return result
         finally:
             if not task.done():
@@ -797,6 +867,9 @@ async def try_offload(command, timeout=None, expected_duration=None, cancellatio
         if cancellation_event is not None and cancellation_event.is_set():
             raise cancellation_error('FFmpeg process was cancelled') from None
         busy = isinstance(exc, NoBigSlot) or (isinstance(exc, urllib.error.HTTPError) and exc.code == 503)
+        if stats is not None:
+            stats['result'] = ('no big slot' if isinstance(exc, NoBigSlot) else 'home 503 busy' if busy
+                               else 'error ' + type(exc).__name__ + ': ' + str(exc)[:60])
         if not explicit_url and not busy:
             _offline_until = time.monotonic() + 5
         if busy:
@@ -805,6 +878,9 @@ async def try_offload(command, timeout=None, expected_duration=None, cancellatio
         logger.info('PC boost unavailable (%s); using original native executor', type(exc).__name__)
         return note_decline('error ' + type(exc).__name__ + ': ' + str(exc)[:70] + (' [home]' if home_scoped() else '') + ' (5 s offline)')
     finally:
+        if stats is not None:
+            stats['total'] = round(time.monotonic() - began, 2)
+            write_timing(stats)
         if identifier:
             try:
                 await asyncio.to_thread(http_request, url, token, 'DELETE', '/renders/' + identifier, None, .7)

@@ -45,7 +45,8 @@ function world() {
   const db = { prepare: () => ({ get: id => ({ started_at: id === 'old' ? rows.b : rows.c, queued_at: 'q' }) }) };
   let wakes = 0;
   const manager = createJobPriority({ getJobs: () => jp, getLanes: () => AM, progress: id => progress[id],
-    getDb: () => db, wake: () => { wakes++; }, setTimer: () => ({}), clearTimer: () => {} });
+    getDb: () => db, wake: () => { wakes++; }, setTimer: () => ({}), clearTimer: () => {},
+    settings: () => ({ earlyPhasePriority: true, shortVideoPriority: false }) }); // plain finish-first; short lift: job-priority-short.test.cjs
   return { jp, render, progress, manager, wakes: () => wakes };
 }
 
